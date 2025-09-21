@@ -1,0 +1,52 @@
+# HLS Stream Restreamer Configuration
+
+# Stream sources configuration
+sources:
+  - name: "Promax 1"
+    type: "xtream"
+    url: "http://line.ott-hello.xyz"
+    username: "065CD6"
+    password: "A6D549"
+    max_connections: 1
+    refresh_interval: 86400  # 5 minutes
+    enabled: true
+
+  - name: "Promax 2"
+    type: "xtream"
+    url: "http://line.ott-hello.xyz"
+    username: "603934"
+    password: "60C73F"
+    max_connections: 1
+    refresh_interval: 86400  # 5 minutes
+    enabled: true
+
+# Stream filtering configuration
+#filters:
+  # Include only streams matching these name patterns (PCRE regex)
+#  include_name_patterns:
+#    - ".*HD.*"           # Only HD channels
+#    - ".*Sports.*"       # Sports channels
+#    - "CNN|BBC|Fox"      # News channels
+
+  # Include only streams matching these URL patterns (PCRE regex)
+#  include_stream_patterns:
+#    - ".*\\.ts$"         # Only TS streams
+#    - ".*live.*"         # Only live streams
+
+  # Exclude streams matching these name patterns (PCRE regex)
+#  exclude_name_patterns:
+#    - ".*test.*"         # No test channels
+#    - ".*adult.*"        # No adult content
+#    - ".*XXX.*"          # No explicit content
+
+  # Exclude streams matching these URL patterns (PCRE regex)
+#  exclude_stream_patterns:
+#    - ".*\\.mp4$"        # No MP4 files
+#    - ".*blocked.*"      # No blocked streams
+
+# Application configuration
+max_total_connections: 2  # Maximum total connections to this app
+bind_host: "0.0.0.0"        # Bind address
+bind_port: 8080             # Bind port
+public_url: "http://127.0.0.1:8080" 
+log_level: "DEBUG"           # Logging level (DEBUG, INFO, WARNING, ERROR)

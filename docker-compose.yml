@@ -1,0 +1,11 @@
+services:
+  hls-restreamer:
+    build: .
+    container_name: kptv_promax
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
