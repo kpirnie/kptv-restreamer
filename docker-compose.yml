@@ -1,9 +1,12 @@
 services:
-  hls-restreamer:
-    build: .
+  kptv-promax:
+    #image: ghcr.io/kpirnie/kptv-restreamer:latest
+    image: localhost/kptest:latest
     container_name: kptv_promax
+    hostname: kptv_promnax
+    restart: unless-stopped
     ports:
-      - "8080:8080"
+      - 9000:8080
     volumes:
       - ./config:/app/config:ro
     environment:

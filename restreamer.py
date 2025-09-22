@@ -374,6 +374,36 @@ class StreamFilter:
             return False
 
 
+class StreamNameMapper:
+    """Maps stream names to short hashes for URL generation"""
+    
+    def __init__(self):
+        self.name_to_hash: Dict[str, str] = {}
+        self.hash_to_name: Dict[str, str] = {}
+    
+    def get_hash(self, channel_name: str) -> str:
+        """Get hash for channel name, creating if needed"""
+        if channel_name in self.name_to_hash:
+            return self.name_to_hash[channel_name]
+        
+        import hashlib
+        hash_obj = hashlib.sha256(channel_name.encode('utf-8'))
+        hash_str = hash_obj.hexdigest()[:16]
+        
+        self.name_to_hash[channel_name] = hash_str
+        self.hash_to_name[hash_str] = channel_name
+        return hash_str
+    
+    def get_name(self, hash_str: str) -> Optional[str]:
+        """Get channel name from hash"""
+        return self.hash_to_name.get(hash_str)
+    
+    def clear(self):
+        """Clear all mappings"""
+        self.name_to_hash.clear()
+        self.hash_to_name.clear()
+
+
 class StreamAggregator:
     """Aggregates and groups streams from multiple sources"""
     
@@ -381,6 +411,7 @@ class StreamAggregator:
         self.sources: Dict[str, StreamSource] = {}
         self.filter = stream_filter
         self.grouped_streams: Dict[str, List[StreamInfo]] = {}
+        self.name_mapper = StreamNameMapper()
         self._lock = asyncio.Lock()
     
     def add_source(self, source: StreamSource):
@@ -402,6 +433,7 @@ class StreamAggregator:
         """Rebuild grouped streams from all sources"""
         async with self._lock:
             self.grouped_streams.clear()
+            self.name_mapper.clear()
             
             for source in self.sources.values():
                 if not source.config.enabled:
@@ -412,6 +444,7 @@ class StreamAggregator:
                         name = stream.name
                         if name not in self.grouped_streams:
                             self.grouped_streams[name] = []
+                            self.name_mapper.get_hash(name)
                         self.grouped_streams[name].append(stream)
             
             logger.info(f"Grouped {len(self.grouped_streams)} unique streams")
@@ -492,6 +525,7 @@ class StreamRestreamer:
             except Exception as e:
                 logger.error(f"Error in refresh loop: {e}")
         
+
     async def get_m3u8_playlist(self) -> str:
         """Generate M3U8 playlist of all grouped streams"""
         grouped_streams = self.aggregator.get_grouped_streams()
@@ -511,23 +545,23 @@ class StreamRestreamer:
             
             lines.append(extinf)
             
-            # Normalize stream name by replacing special characters with underscores
-            normalized_name = re.sub(r'[^a-zA-Z0-9\-_]', '_', name)
-            full_url = f"{self.config.public_url.rstrip('/')}/stream/{normalized_name}"
+            # Use hash instead of normalization
+            stream_hash = self.aggregator.name_mapper.get_hash(name)
+            full_url = f"{self.config.public_url.rstrip('/')}/stream/{stream_hash}"
             lines.append(full_url)
         
         return '\n'.join(lines)
 
-    def get_available_sources_for_stream(self, stream_name: str) -> List[StreamInfo]:
+
+    def get_available_sources_for_stream(self, stream_hash: str) -> List[StreamInfo]:
         """Get available sources for a stream, ordered by connection availability"""
-        grouped_streams = self.aggregator.get_grouped_streams()
+        # Get original name from hash
+        stream_name = self.aggregator.name_mapper.get_name(stream_hash)
+        if not stream_name:
+            return []
         
-        target_streams = None
-        for name, streams in grouped_streams.items():
-            normalized_name = re.sub(r'[^a-zA-Z0-9\-_]', '_', name)
-            if normalized_name == stream_name:
-                target_streams = streams
-                break
+        grouped_streams = self.aggregator.get_grouped_streams()
+        target_streams = grouped_streams.get(stream_name)
         
         if not target_streams:
             return []
@@ -545,17 +579,15 @@ class StreamRestreamer:
         # Return available sources first, then unavailable ones
         return available_streams + unavailable_streams
 
-    async def stream_content(self, stream_name: str):
+    async def stream_content(self, stream_hash: str):
         """Stream content for a specific stream with automatic failover"""
-        grouped_streams = self.aggregator.get_grouped_streams()
+        # Get original name from hash
+        stream_name = self.aggregator.name_mapper.get_name(stream_hash)
+        if not stream_name:
+            raise HTTPException(status_code=404, detail="Stream not found")
         
-        # Find stream by normalized name
-        target_streams = None
-        for name, streams in grouped_streams.items():
-            normalized_name = re.sub(r'[^a-zA-Z0-9\-_]', '_', name)
-            if normalized_name == stream_name:
-                target_streams = streams
-                break
+        grouped_streams = self.aggregator.get_grouped_streams()
+        target_streams = grouped_streams.get(stream_name)
         
         if target_streams is None:
             raise HTTPException(status_code=404, detail="Stream not found")
@@ -626,11 +658,52 @@ class StreamRestreamer:
         # Get initial stream
         result = await try_next_source()
         if result is None:
+            
+            # All sources failed due to connection limits - serve offline stream
             error_msg = f"All {len(target_streams)} sources failed"
             if last_error:
                 error_msg += f". Last error: {last_error}"
-            logger.error(error_msg)
-            raise HTTPException(status_code=503, detail=error_msg)
+            logger.warning(f"{error_msg}. Serving offline stream for {stream_name}")
+            
+            # Stream the offline video instead
+            try:
+                offline_url = "https://cdn.kevp.us/tv/offline.mkv"
+                resp = await self.session.get(offline_url, allow_redirects=True)
+                
+                if resp.status == 200:
+                    logger.info(f"Serving offline stream for {stream_name}")
+                    
+                    async def generate_offline_stream():
+                        try:
+                            async for chunk in resp.content.iter_chunked(8192):
+                                yield chunk
+                        except Exception as e:
+                            logger.error(f"Error streaming offline content: {e}")
+                        finally:
+                            try:
+                                resp.close()
+                            except Exception:
+                                pass
+                    
+                    return StreamingResponse(
+                        generate_offline_stream(),
+                        media_type="video/x-matroska",
+                        headers={
+                            "Cache-Control": "no-cache, no-store, must-revalidate",
+                            "Pragma": "no-cache",
+                            "Expires": "0",
+                            "Connection": "keep-alive",
+                            "Accept-Ranges": "bytes"
+                        }
+                    )
+                else:
+                    logger.error(f"Failed to fetch offline stream: HTTP {resp.status}")
+                    resp.close()
+                    raise HTTPException(status_code=503, detail=error_msg)
+                    
+            except Exception as e:
+                logger.error(f"Error serving offline stream: {e}")
+                raise HTTPException(status_code=503, detail=error_msg)
         
         # If it's an HLS playlist, it was already returned
         if isinstance(result, PlainTextResponse):
@@ -780,13 +853,13 @@ async def get_playlist():
     return PlainTextResponse(content=playlist, media_type="application/vnd.apple.mpegurl")
 
 
-@app.get("/stream/{stream_name:path}")
-async def stream_channel(stream_name: str):
+@app.get("/stream/{stream_hash:path}")
+async def stream_channel(stream_hash: str):
     """Stream a specific channel"""
     if not restreamer:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
-    return await restreamer.stream_content(stream_name)
+    return await restreamer.stream_content(stream_hash)
 
 
 @app.get("/status")
@@ -848,12 +921,12 @@ async def list_streams():
     streams_list = []
     for name, streams in grouped_streams.items():
         primary_stream = streams[0]
-        normalized_name = re.sub(r'[^a-zA-Z0-9\-_]', '_', name)
+        stream_hash = restreamer.aggregator.name_mapper.get_hash(name)
         streams_list.append({
             "name": name,
-            "normalized_name": normalized_name,
-            "url": f"/stream/{normalized_name}",
-            "full_url": f"{restreamer.config.public_url.rstrip('/')}/stream/{normalized_name}",
+            "hash": stream_hash,
+            "url": f"/stream/{stream_hash}",
+            "full_url": f"{restreamer.config.public_url.rstrip('/')}/stream/{stream_hash}",
             "sources": len(streams),
             "category": primary_stream.category,
             "group": primary_stream.group,
@@ -862,26 +935,28 @@ async def list_streams():
     
     return {"streams": streams_list}
 
-@app.get("/direct/{stream_name:path}")
-async def direct_stream_test(stream_name: str):
+@app.get("/direct/{stream_hash:path}")
+async def direct_stream_test(stream_hash: str):
     """Test direct access to first source for a stream"""
     if not restreamer:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
-    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    # Get original name from hash
+    stream_name = restreamer.aggregator.name_mapper.get_name(stream_hash)
+    if not stream_name:
+        raise HTTPException(status_code=404, detail="Stream not found")
     
-    # Find stream by normalized name
-    for name, streams in grouped_streams.items():
-        normalized_name = re.sub(r'[^a-zA-Z0-9\-_]', '_', name)
-        if normalized_name == stream_name and streams:
-            first_stream = streams[0]
-            logger.info(f"Direct test access to: {first_stream.url}")
-            
-            # Return redirect to the actual source URL for testing
-            return Response(
-                status_code=302,
-                headers={"Location": first_stream.url}
-            )
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    streams = grouped_streams.get(stream_name)
+    
+    if streams:
+        first_stream = streams[0]
+        logger.info(f"Direct test access to: {first_stream.url}")
+        
+        return Response(
+            status_code=302,
+            headers={"Location": first_stream.url}
+        )
     
     raise HTTPException(status_code=404, detail="Stream not found")
     
@@ -895,7 +970,7 @@ async def test_streams():
     results = {}
     
     for name, streams in list(grouped_streams.items())[:10]:  # Test first 10 streams
-        normalized_name = re.sub(r'[^a-zA-Z0-9\-_]', '_', name)
+        stream_hash = restreamer.aggregator.name_mapper.get_hash(name)
         test_results = []
         
         for stream in streams:
@@ -921,63 +996,66 @@ async def test_streams():
                     "stream_type": "HLS" if stream.url.endswith('.m3u8') else "TS" if stream.url.endswith('.ts') else "Unknown"
                 })
         
-        results[normalized_name] = {
+        results[stream_hash] = {
             "original_name": name,
-            "our_stream_url": f"/stream/{normalized_name}",
-            "direct_test_url": f"/direct/{normalized_name}",
+            "hash": stream_hash,
+            "our_stream_url": f"/stream/{stream_hash}",
+            "direct_test_url": f"/direct/{stream_hash}",
             "streams": test_results
         }
     
     return results
 
-@app.get("/debug/{stream_name:path}")
-async def debug_stream(stream_name: str):
+@app.get("/debug/{stream_hash:path}")
+async def debug_stream(stream_hash: str):
     """Debug stream information"""
     if not restreamer:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
-    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    # Get original name from hash
+    stream_name = restreamer.aggregator.name_mapper.get_name(stream_hash)
+    if not stream_name:
+        raise HTTPException(status_code=404, detail="Stream not found")
     
-    # Find stream by normalized name
-    for name, streams in grouped_streams.items():
-        normalized_name = re.sub(r'[^a-zA-Z0-9\-_]', '_', name)
-        if normalized_name == stream_name:
-            debug_info = {
-                "original_name": name,
-                "normalized_name": normalized_name,
-                "stream_count": len(streams),
-                "streams": []
-            }
-            
-            for i, stream in enumerate(streams):
-                try:
-                    # Test the stream URL
-                    async with restreamer.session.head(stream.url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        stream_info = {
-                            "index": i,
-                            "source_id": stream.source_id,
-                            "url": stream.url,
-                            "status_code": resp.status,
-                            "content_type": resp.headers.get('content-type', 'unknown'),
-                            "content_length": resp.headers.get('content-length', 'unknown'),
-                            "stream_type": "HLS" if stream.url.endswith('.m3u8') else "TS" if stream.url.endswith('.ts') else "Unknown",
-                            "accessible": resp.status == 200
-                        }
-                except Exception as e:
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    streams = grouped_streams.get(stream_name)
+    
+    if streams:
+        debug_info = {
+            "original_name": stream_name,
+            "hash": stream_hash,
+            "stream_count": len(streams),
+            "streams": []
+        }
+        
+        for i, stream in enumerate(streams):
+            try:
+                # Test the stream URL
+                async with restreamer.session.head(stream.url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     stream_info = {
                         "index": i,
                         "source_id": stream.source_id,
                         "url": stream.url,
-                        "error": str(e),
-                        "accessible": False
+                        "status_code": resp.status,
+                        "content_type": resp.headers.get('content-type', 'unknown'),
+                        "content_length": resp.headers.get('content-length', 'unknown'),
+                        "stream_type": "HLS" if stream.url.endswith('.m3u8') else "TS" if stream.url.endswith('.ts') else "Unknown",
+                        "accessible": resp.status == 200
                     }
-                
-                debug_info["streams"].append(stream_info)
+            except Exception as e:
+                stream_info = {
+                    "index": i,
+                    "source_id": stream.source_id,
+                    "url": stream.url,
+                    "error": str(e),
+                    "accessible": False
+                }
             
-            return debug_info
+            debug_info["streams"].append(stream_info)
+        
+        return debug_info
     
     raise HTTPException(status_code=404, detail="Stream not found")
-
 
 def load_config(config_path: str) -> AppConfig:
     """Load configuration from file"""
