@@ -658,52 +658,57 @@ class StreamRestreamer:
         # Get initial stream
         result = await try_next_source()
         if result is None:
-            
             # All sources failed due to connection limits - serve offline stream
             error_msg = f"All {len(target_streams)} sources failed"
             if last_error:
                 error_msg += f". Last error: {last_error}"
             logger.warning(f"{error_msg}. Serving offline stream for {stream_name}")
             
-            # Stream the offline video instead
-            try:
-                offline_url = "https://cdn.kevp.us/tv/offline.mkv"
-                resp = await self.session.get(offline_url, allow_redirects=True)
+            # Stream the offline video instead with looping
+            async def generate_offline_stream():
+                offline_url = "https://cdn.kevp.us/tv/loading.mkv"
                 
-                if resp.status == 200:
-                    logger.info(f"Serving offline stream for {stream_name}")
-                    
-                    async def generate_offline_stream():
-                        try:
-                            async for chunk in resp.content.iter_chunked(8192):
-                                yield chunk
-                        except Exception as e:
-                            logger.error(f"Error streaming offline content: {e}")
-                        finally:
+                while True:
+                    try:
+                        logger.info(f"Starting offline stream loop for {stream_name}")
+                        resp = await self.session.get(offline_url, allow_redirects=True)
+                        
+                        if resp.status == 200:
                             try:
-                                resp.close()
-                            except Exception:
-                                pass
-                    
-                    return StreamingResponse(
-                        generate_offline_stream(),
-                        media_type="video/x-matroska",
-                        headers={
-                            "Cache-Control": "no-cache, no-store, must-revalidate",
-                            "Pragma": "no-cache",
-                            "Expires": "0",
-                            "Connection": "keep-alive",
-                            "Accept-Ranges": "bytes"
-                        }
-                    )
-                else:
-                    logger.error(f"Failed to fetch offline stream: HTTP {resp.status}")
-                    resp.close()
-                    raise HTTPException(status_code=503, detail=error_msg)
-                    
-            except Exception as e:
-                logger.error(f"Error serving offline stream: {e}")
-                raise HTTPException(status_code=503, detail=error_msg)
+                                async for chunk in resp.content.iter_chunked(8192):
+                                    yield chunk
+                                # Video ended normally, loop back
+                                logger.info(f"Offline stream ended, restarting loop for {stream_name}")
+                            finally:
+                                try:
+                                    resp.close()
+                                except Exception:
+                                    pass
+                        else:
+                            logger.error(f"Failed to fetch offline stream: HTTP {resp.status}")
+                            resp.close()
+                            break
+                            
+                    except asyncio.CancelledError:
+                        logger.info(f"Offline stream cancelled for {stream_name}")
+                        raise
+                    except Exception as e:
+                        logger.error(f"Error in offline stream loop: {e}")
+                        # Wait a bit before retrying to avoid tight error loops
+                        await asyncio.sleep(5)
+                        continue
+            
+            return StreamingResponse(
+                generate_offline_stream(),
+                media_type="video/x-matroska",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                    "Connection": "keep-alive",
+                    "Accept-Ranges": "bytes"
+                }
+            )
         
         # If it's an HLS playlist, it was already returned
         if isinstance(result, PlainTextResponse):

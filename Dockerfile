@@ -8,6 +8,7 @@ RUN apk add --no-cache gcc musl-dev
 
 # Copy and install requirements
 COPY requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Production stage
