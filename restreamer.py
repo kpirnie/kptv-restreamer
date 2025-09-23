@@ -17,6 +17,9 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 import argparse
 from contextlib import asynccontextmanager
+import hashlib
+import base64
+from urllib.parse import quote, unquote
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse, PlainTextResponse
@@ -74,6 +77,58 @@ class AppConfig:
     bind_port: int = 8080
     public_url: str = "http://localhost:8080"
     log_level: str = "INFO"
+
+
+class StreamNameMapper:
+    """Handles stream name encoding/decoding for URL safety"""
+    
+    def __init__(self):
+        self.name_to_id = {}
+        self.id_to_name = {}
+        self._lock = asyncio.Lock()
+    
+    def _generate_safe_id(self, name: str) -> str:
+        """Generate a URL-safe ID from stream name - alphanumeric only"""
+        # Keep only alphanumeric characters
+        clean_id = re.sub(r'[^a-zA-Z0-9]', '', name)
+        
+        # Ensure we have something
+        if not clean_id:
+            clean_id = "unknownstream"
+        
+        return clean_id
+    
+    async def get_stream_id(self, name: str) -> str:
+        """Get URL-safe ID for stream name"""
+        async with self._lock:
+            if name not in self.name_to_id:
+                stream_id = self._generate_safe_id(name)
+                
+                # Store both directions
+                self.name_to_id[name] = stream_id
+                
+                # For id_to_name, we keep the first name that maps to this ID
+                # This allows multiple names to map to the same ID (grouping)
+                if stream_id not in self.id_to_name:
+                    self.id_to_name[stream_id] = name
+            
+            return self.name_to_id[name]
+    
+    async def get_stream_name(self, stream_id: str) -> str:
+        """Get original stream name from URL-safe ID"""
+        async with self._lock:
+            return self.id_to_name.get(stream_id, "")
+    
+    async def get_all_mappings(self) -> dict:
+        """Get all current mappings for debugging"""
+        async with self._lock:
+            return {
+                "name_to_id": self.name_to_id.copy(),
+                "id_to_name": self.id_to_name.copy(),
+                "total_streams": len(self.name_to_id),
+                "total_unique_ids": len(self.id_to_name)
+            }
+
 
 
 class ConnectionManager:
@@ -463,6 +518,7 @@ class StreamRestreamer:
         self.connection_manager = ConnectionManager(config.max_total_connections)
         self.stream_filter = StreamFilter(config.filters)
         self.aggregator = StreamAggregator(self.stream_filter)
+        self.name_mapper = StreamNameMapper()
         self.refresh_task = None
     
     async def initialize(self):
@@ -545,9 +601,9 @@ class StreamRestreamer:
             
             lines.append(extinf)
             
-            # Use hash instead of normalization
-            stream_hash = self.aggregator.name_mapper.get_hash(name)
-            full_url = f"{self.config.public_url.rstrip('/')}/stream/{stream_hash}"
+            # Get URL-safe ID for this stream name
+            stream_id = await self.name_mapper.get_stream_id(name)
+            full_url = f"{self.config.public_url.rstrip('/')}/stream/{stream_id}"
             lines.append(full_url)
         
         return '\n'.join(lines)
@@ -579,20 +635,22 @@ class StreamRestreamer:
         # Return available sources first, then unavailable ones
         return available_streams + unavailable_streams
 
-    async def stream_content(self, stream_hash: str):
+
+    async def stream_content(self, stream_id: str):
         """Stream content for a specific stream with automatic failover"""
-        # Get original name from hash
-        stream_name = self.aggregator.name_mapper.get_name(stream_hash)
+        # Get original stream name from the URL-safe ID
+        stream_name = await self.name_mapper.get_stream_name(stream_id)
         if not stream_name:
-            raise HTTPException(status_code=404, detail="Stream not found")
+            raise HTTPException(status_code=404, detail=f"Stream ID '{stream_id}' not found")
         
         grouped_streams = self.aggregator.get_grouped_streams()
+        
+        # Find stream by original name
         target_streams = grouped_streams.get(stream_name)
-        
         if target_streams is None:
-            raise HTTPException(status_code=404, detail="Stream not found")
+            raise HTTPException(status_code=404, detail=f"Stream '{stream_name}' not found in sources")
         
-        # Try streams in order until one works (automatic failover)
+        # Rest of the method stays the same...
         last_error = None
         current_stream_index = 0
         
@@ -611,7 +669,7 @@ class StreamRestreamer:
                     continue
                 
                 try:
-                    logger.info(f"Attempting to stream from source {source_id} ({current_stream_index+1}/{len(target_streams)}): {stream.url}")
+                    logger.info(f"Attempting to stream '{stream_name}' from source {source_id} ({current_stream_index+1}/{len(target_streams)}): {stream.url}")
                     
                     # Determine stream type by URL extension
                     is_hls_playlist = stream.url.lower().endswith('.m3u8')
@@ -658,57 +716,11 @@ class StreamRestreamer:
         # Get initial stream
         result = await try_next_source()
         if result is None:
-            # All sources failed due to connection limits - serve offline stream
-            error_msg = f"All {len(target_streams)} sources failed"
+            error_msg = f"All {len(target_streams)} sources failed for '{stream_name}'"
             if last_error:
                 error_msg += f". Last error: {last_error}"
-            logger.warning(f"{error_msg}. Serving offline stream for {stream_name}")
-            
-            # Stream the offline video instead with looping
-            async def generate_offline_stream():
-                offline_url = "https://cdn.kevp.us/tv/loading.mkv"
-                
-                while True:
-                    try:
-                        logger.info(f"Starting offline stream loop for {stream_name}")
-                        resp = await self.session.get(offline_url, allow_redirects=True)
-                        
-                        if resp.status == 200:
-                            try:
-                                async for chunk in resp.content.iter_chunked(8192):
-                                    yield chunk
-                                # Video ended normally, loop back
-                                logger.info(f"Offline stream ended, restarting loop for {stream_name}")
-                            finally:
-                                try:
-                                    resp.close()
-                                except Exception:
-                                    pass
-                        else:
-                            logger.error(f"Failed to fetch offline stream: HTTP {resp.status}")
-                            resp.close()
-                            break
-                            
-                    except asyncio.CancelledError:
-                        logger.info(f"Offline stream cancelled for {stream_name}")
-                        raise
-                    except Exception as e:
-                        logger.error(f"Error in offline stream loop: {e}")
-                        # Wait a bit before retrying to avoid tight error loops
-                        await asyncio.sleep(5)
-                        continue
-            
-            return StreamingResponse(
-                generate_offline_stream(),
-                media_type="video/x-matroska",
-                headers={
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0",
-                    "Connection": "keep-alive",
-                    "Accept-Ranges": "bytes"
-                }
-            )
+            logger.error(error_msg)
+            raise HTTPException(status_code=503, detail=error_msg)
         
         # If it's an HLS playlist, it was already returned
         if isinstance(result, PlainTextResponse):
@@ -731,14 +743,14 @@ class StreamRestreamer:
                             
                             # Log progress every 1000 chunks
                             if chunk_count % 1000 == 0:
-                                logger.debug(f"Streamed {chunk_count} chunks for {stream_name} from {source_id}")
+                                logger.debug(f"Streamed {chunk_count} chunks for '{stream_name}' from {source_id}")
                         
                         # If we reach here, the stream ended normally
-                        logger.info(f"Stream ended normally for {stream_name} from {source_id} after {chunk_count} chunks")
+                        logger.info(f"Stream ended normally for '{stream_name}' from {source_id} after {chunk_count} chunks")
                         break
                         
                     except (asyncio.TimeoutError, aiohttp.ClientError, ConnectionError) as e:
-                        logger.warning(f"Stream error for {stream_name} from {source_id} after {chunk_count} chunks: {type(e).__name__}: {str(e)}")
+                        logger.warning(f"Stream error for '{stream_name}' from {source_id} after {chunk_count} chunks: {type(e).__name__}: {str(e)}")
                         
                         # Clean up current connection
                         try:
@@ -752,25 +764,25 @@ class StreamRestreamer:
                         # Try next source
                         current_stream_index += 1
                         if current_stream_index >= len(target_streams):
-                            logger.error(f"No more sources available for {stream_name}")
+                            logger.error(f"No more sources available for '{stream_name}'")
                             break
                         
                         # Get next stream
                         result = await try_next_source()
                         if result is None:
-                            logger.error(f"Failed to failover to next source for {stream_name}")
+                            logger.error(f"Failed to failover to next source for '{stream_name}'")
                             break
                         
                         # Update current stream info
                         resp, source_id, current_stream = result
                         connection_released = False
-                        logger.info(f"Failover successful for {stream_name} to source {source_id}")
+                        logger.info(f"Failover successful for '{stream_name}' to source {source_id}")
                         
             except asyncio.CancelledError:
-                logger.info(f"Streaming cancelled for {stream_name} from {source_id}")
+                logger.info(f"Streaming cancelled for '{stream_name}' from {source_id}")
                 raise
             except Exception as e:
-                logger.error(f"Unexpected error during streaming for {stream_name} from {source_id}: {type(e).__name__}: {str(e)}")
+                logger.error(f"Unexpected error during streaming for '{stream_name}' from {source_id}: {type(e).__name__}: {str(e)}")
                 raise
             finally:
                 if not connection_released:
@@ -801,7 +813,9 @@ class StreamRestreamer:
                 "Accept-Ranges": "bytes"
             }
         )
-
+    
+    
+    
     async def test_stream_url(self, url: str) -> bool:
         """Test if a stream URL is accessible"""
         try:
@@ -1061,6 +1075,37 @@ async def debug_stream(stream_hash: str):
         return debug_info
     
     raise HTTPException(status_code=404, detail="Stream not found")
+
+
+@app.get("/mappings")
+async def get_stream_mappings():
+    """Get stream name to ID mappings"""
+    if not restreamer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    return await restreamer.name_mapper.get_all_mappings()
+
+@app.get("/find/{search_term:path}")
+async def find_streams(search_term: str):
+    """Find streams by name"""
+    if not restreamer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    matches = []
+    
+    for name in grouped_streams.keys():
+        if search_term.lower() in name.lower():
+            stream_id = await restreamer.name_mapper.get_stream_id(name)
+            matches.append({
+                "original_name": name,
+                "stream_id": stream_id,
+                "url": f"/stream/{stream_id}",
+                "full_url": f"{restreamer.config.public_url.rstrip('/')}/stream/{stream_id}"
+            })
+    
+    return {"search_term": search_term, "matches": matches}
+
 
 def load_config(config_path: str) -> AppConfig:
     """Load configuration from file"""
