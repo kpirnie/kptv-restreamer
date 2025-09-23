@@ -298,7 +298,7 @@ class XtreamSource(StreamSource):
                         
                         streams.append(StreamInfo(
                             name=f"{series_name} (Series)",
-                            url=f"{self.config.url}/series/{self.config.username}/{self.config.password}/{series_id}.m3u8",
+                            url=f"{self.config.url}/series/{self.config.username}/{self.config.password}/{series_id}.ts",
                             source_id=self.config.name,
                             category=series.get('category_name', ''),
                             logo=series.get('cover', ''),
@@ -429,36 +429,6 @@ class StreamFilter:
             return False
 
 
-class StreamNameMapper:
-    """Maps stream names to short hashes for URL generation"""
-    
-    def __init__(self):
-        self.name_to_hash: Dict[str, str] = {}
-        self.hash_to_name: Dict[str, str] = {}
-    
-    def get_hash(self, channel_name: str) -> str:
-        """Get hash for channel name, creating if needed"""
-        if channel_name in self.name_to_hash:
-            return self.name_to_hash[channel_name]
-        
-        import hashlib
-        hash_obj = hashlib.sha256(channel_name.encode('utf-8'))
-        hash_str = hash_obj.hexdigest()[:16]
-        
-        self.name_to_hash[channel_name] = hash_str
-        self.hash_to_name[hash_str] = channel_name
-        return hash_str
-    
-    def get_name(self, hash_str: str) -> Optional[str]:
-        """Get channel name from hash"""
-        return self.hash_to_name.get(hash_str)
-    
-    def clear(self):
-        """Clear all mappings"""
-        self.name_to_hash.clear()
-        self.hash_to_name.clear()
-
-
 class StreamAggregator:
     """Aggregates and groups streams from multiple sources"""
     
@@ -466,7 +436,6 @@ class StreamAggregator:
         self.sources: Dict[str, StreamSource] = {}
         self.filter = stream_filter
         self.grouped_streams: Dict[str, List[StreamInfo]] = {}
-        self.name_mapper = StreamNameMapper()
         self._lock = asyncio.Lock()
     
     def add_source(self, source: StreamSource):
@@ -488,7 +457,6 @@ class StreamAggregator:
         """Rebuild grouped streams from all sources"""
         async with self._lock:
             self.grouped_streams.clear()
-            self.name_mapper.clear()
             
             for source in self.sources.values():
                 if not source.config.enabled:
@@ -499,7 +467,6 @@ class StreamAggregator:
                         name = stream.name
                         if name not in self.grouped_streams:
                             self.grouped_streams[name] = []
-                            self.name_mapper.get_hash(name)
                         self.grouped_streams[name].append(stream)
             
             logger.info(f"Grouped {len(self.grouped_streams)} unique streams")
@@ -507,6 +474,7 @@ class StreamAggregator:
     def get_grouped_streams(self) -> Dict[str, List[StreamInfo]]:
         """Get current grouped streams"""
         return self.grouped_streams.copy()
+
 
 
 class StreamRestreamer:
@@ -940,12 +908,12 @@ async def list_streams():
     streams_list = []
     for name, streams in grouped_streams.items():
         primary_stream = streams[0]
-        stream_hash = restreamer.aggregator.name_mapper.get_hash(name)
+        stream_id = await restreamer.name_mapper.get_stream_id(name)
         streams_list.append({
             "name": name,
-            "hash": stream_hash,
-            "url": f"/stream/{stream_hash}",
-            "full_url": f"{restreamer.config.public_url.rstrip('/')}/stream/{stream_hash}",
+            "stream_id": stream_id,
+            "url": f"/stream/{stream_id}",
+            "full_url": f"{restreamer.config.public_url.rstrip('/')}/stream/{stream_id}",
             "sources": len(streams),
             "category": primary_stream.category,
             "group": primary_stream.group,
@@ -954,14 +922,13 @@ async def list_streams():
     
     return {"streams": streams_list}
 
-@app.get("/direct/{stream_hash:path}")
-async def direct_stream_test(stream_hash: str):
+@app.get("/direct/{stream_id:path}")
+async def direct_stream_test(stream_id: str):
     """Test direct access to first source for a stream"""
     if not restreamer:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
-    # Get original name from hash
-    stream_name = restreamer.aggregator.name_mapper.get_name(stream_hash)
+    stream_name = await restreamer.name_mapper.get_stream_name(stream_id)
     if not stream_name:
         raise HTTPException(status_code=404, detail="Stream not found")
     
@@ -970,12 +937,7 @@ async def direct_stream_test(stream_hash: str):
     
     if streams:
         first_stream = streams[0]
-        logger.info(f"Direct test access to: {first_stream.url}")
-        
-        return Response(
-            status_code=302,
-            headers={"Location": first_stream.url}
-        )
+        return Response(status_code=302, headers={"Location": first_stream.url})
     
     raise HTTPException(status_code=404, detail="Stream not found")
     
@@ -1025,14 +987,13 @@ async def test_streams():
     
     return results
 
-@app.get("/debug/{stream_hash:path}")
-async def debug_stream(stream_hash: str):
+@app.get("/debug/{stream_id:path}")
+async def debug_stream(stream_id: str):
     """Debug stream information"""
     if not restreamer:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
-    # Get original name from hash
-    stream_name = restreamer.aggregator.name_mapper.get_name(stream_hash)
+    stream_name = await restreamer.name_mapper.get_stream_name(stream_id)
     if not stream_name:
         raise HTTPException(status_code=404, detail="Stream not found")
     
@@ -1042,14 +1003,13 @@ async def debug_stream(stream_hash: str):
     if streams:
         debug_info = {
             "original_name": stream_name,
-            "hash": stream_hash,
+            "stream_id": stream_id,
             "stream_count": len(streams),
             "streams": []
         }
         
         for i, stream in enumerate(streams):
             try:
-                # Test the stream URL
                 async with restreamer.session.head(stream.url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     stream_info = {
                         "index": i,
@@ -1057,8 +1017,6 @@ async def debug_stream(stream_hash: str):
                         "url": stream.url,
                         "status_code": resp.status,
                         "content_type": resp.headers.get('content-type', 'unknown'),
-                        "content_length": resp.headers.get('content-length', 'unknown'),
-                        "stream_type": "HLS" if stream.url.endswith('.m3u8') else "TS" if stream.url.endswith('.ts') else "Unknown",
                         "accessible": resp.status == 200
                     }
             except Exception as e:
