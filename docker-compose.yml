@@ -1,9 +1,9 @@
 services:
-  kptv-promax:
+  kptest:
     #image: ghcr.io/kpirnie/kptv-restreamer:latest
     image: localhost/kptest:latest
-    container_name: kptv_promax
-    hostname: kptv_promnax
+    container_name: kptest
+    hostname: kptest
     restart: unless-stopped
     ports:
       - 9000:8080

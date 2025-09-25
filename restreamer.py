@@ -104,13 +104,16 @@ class StreamNameMapper:
             if name not in self.name_to_id:
                 stream_id = self._generate_safe_id(name)
                 
+                # Handle duplicates by appending number
+                base_id = stream_id
+                counter = 1
+                while stream_id in self.id_to_name:
+                    stream_id = f"{base_id}{counter}"
+                    counter += 1
+                
                 # Store both directions
                 self.name_to_id[name] = stream_id
-                
-                # For id_to_name, we keep the first name that maps to this ID
-                # This allows multiple names to map to the same ID (grouping)
-                if stream_id not in self.id_to_name:
-                    self.id_to_name[stream_id] = name
+                self.id_to_name[stream_id] = name
             
             return self.name_to_id[name]
     
@@ -128,7 +131,6 @@ class StreamNameMapper:
                 "total_streams": len(self.name_to_id),
                 "total_unique_ids": len(self.id_to_name)
             }
-
 
 
 class ConnectionManager:
@@ -476,7 +478,6 @@ class StreamAggregator:
         return self.grouped_streams.copy()
 
 
-
 class StreamRestreamer:
     """Main application class"""
     
@@ -549,7 +550,6 @@ class StreamRestreamer:
             except Exception as e:
                 logger.error(f"Error in refresh loop: {e}")
         
-
     async def get_m3u8_playlist(self) -> str:
         """Generate M3U8 playlist of all grouped streams"""
         grouped_streams = self.aggregator.get_grouped_streams()
@@ -576,214 +576,6 @@ class StreamRestreamer:
         
         return '\n'.join(lines)
 
-
-    def get_available_sources_for_stream(self, stream_hash: str) -> List[StreamInfo]:
-        """Get available sources for a stream, ordered by connection availability"""
-        # Get original name from hash
-        stream_name = self.aggregator.name_mapper.get_name(stream_hash)
-        if not stream_name:
-            return []
-        
-        grouped_streams = self.aggregator.get_grouped_streams()
-        target_streams = grouped_streams.get(stream_name)
-        
-        if not target_streams:
-            return []
-        
-        # Sort streams by connection availability
-        available_streams = []
-        unavailable_streams = []
-        
-        for stream in target_streams:
-            if self.connection_manager.can_acquire_connection(stream.source_id):
-                available_streams.append(stream)
-            else:
-                unavailable_streams.append(stream)
-        
-        # Return available sources first, then unavailable ones
-        return available_streams + unavailable_streams
-
-
-    async def stream_content(self, stream_id: str):
-        """Stream content for a specific stream with automatic failover"""
-        # Get original stream name from the URL-safe ID
-        stream_name = await self.name_mapper.get_stream_name(stream_id)
-        if not stream_name:
-            raise HTTPException(status_code=404, detail=f"Stream ID '{stream_id}' not found")
-        
-        grouped_streams = self.aggregator.get_grouped_streams()
-        
-        # Find stream by original name
-        target_streams = grouped_streams.get(stream_name)
-        if target_streams is None:
-            raise HTTPException(status_code=404, detail=f"Stream '{stream_name}' not found in sources")
-        
-        # Rest of the method stays the same...
-        last_error = None
-        current_stream_index = 0
-        
-        async def try_next_source():
-            nonlocal current_stream_index, last_error
-            
-            while current_stream_index < len(target_streams):
-                stream = target_streams[current_stream_index]
-                source_id = stream.source_id
-                
-                # Try to acquire connection for this source
-                connection_acquired = await self.connection_manager.acquire_connection(source_id)
-                if not connection_acquired:
-                    logger.warning(f"Connection limit reached for source {source_id}, trying next source")
-                    current_stream_index += 1
-                    continue
-                
-                try:
-                    logger.info(f"Attempting to stream '{stream_name}' from source {source_id} ({current_stream_index+1}/{len(target_streams)}): {stream.url}")
-                    
-                    # Determine stream type by URL extension
-                    is_hls_playlist = stream.url.lower().endswith('.m3u8')
-                    
-                    if is_hls_playlist:
-                        # Handle HLS playlist - fetch content and return immediately
-                        async with self.session.get(stream.url, allow_redirects=True) as resp:
-                            if resp.status == 200:
-                                logger.info(f"Successfully fetched HLS playlist from {stream.url}")
-                                content = await resp.text()
-                                await self.connection_manager.release_connection(source_id)
-                                return PlainTextResponse(content=content, media_type="application/vnd.apple.mpegurl")
-                            else:
-                                logger.warning(f"HTTP {resp.status} from HLS playlist {stream.url}")
-                                last_error = f"HTTP {resp.status}"
-                                await self.connection_manager.release_connection(source_id)
-                                current_stream_index += 1
-                                continue
-                                
-                    else:
-                        # Handle direct streams with automatic failover
-                        resp = await self.session.get(stream.url, allow_redirects=True)
-                        
-                        if resp.status == 200:
-                            logger.info(f"Successfully connected to stream {stream.url}")
-                            return (resp, source_id, stream)
-                        else:
-                            logger.warning(f"HTTP {resp.status} from stream {stream.url}")
-                            last_error = f"HTTP {resp.status}"
-                            resp.close()
-                            await self.connection_manager.release_connection(source_id)
-                            current_stream_index += 1
-                            continue
-                                
-                except Exception as e:
-                    logger.error(f"Error connecting to stream from source {source_id}: {type(e).__name__}: {str(e)}")
-                    last_error = f"{type(e).__name__}: {str(e)}"
-                    await self.connection_manager.release_connection(source_id)
-                    current_stream_index += 1
-                    continue
-            
-            return None
-        
-        # Get initial stream
-        result = await try_next_source()
-        if result is None:
-            error_msg = f"All {len(target_streams)} sources failed for '{stream_name}'"
-            if last_error:
-                error_msg += f". Last error: {last_error}"
-            logger.error(error_msg)
-            raise HTTPException(status_code=503, detail=error_msg)
-        
-        # If it's an HLS playlist, it was already returned
-        if isinstance(result, PlainTextResponse):
-            return result
-        
-        # Handle streaming with automatic failover
-        resp, source_id, current_stream = result
-        
-        async def generate_stream_with_failover():
-            nonlocal current_stream_index, resp, source_id, current_stream
-            connection_released = False
-            chunk_count = 0
-            
-            try:
-                while True:
-                    try:
-                        async for chunk in resp.content.iter_chunked(8192):
-                            chunk_count += 1
-                            yield chunk
-                            
-                            # Log progress every 1000 chunks
-                            if chunk_count % 1000 == 0:
-                                logger.debug(f"Streamed {chunk_count} chunks for '{stream_name}' from {source_id}")
-                        
-                        # If we reach here, the stream ended normally
-                        logger.info(f"Stream ended normally for '{stream_name}' from {source_id} after {chunk_count} chunks")
-                        break
-                        
-                    except (asyncio.TimeoutError, aiohttp.ClientError, ConnectionError) as e:
-                        logger.warning(f"Stream error for '{stream_name}' from {source_id} after {chunk_count} chunks: {type(e).__name__}: {str(e)}")
-                        
-                        # Clean up current connection
-                        try:
-                            resp.close()
-                            if not connection_released:
-                                await self.connection_manager.release_connection(source_id)
-                                connection_released = True
-                        except Exception:
-                            pass
-                        
-                        # Try next source
-                        current_stream_index += 1
-                        if current_stream_index >= len(target_streams):
-                            logger.error(f"No more sources available for '{stream_name}'")
-                            break
-                        
-                        # Get next stream
-                        result = await try_next_source()
-                        if result is None:
-                            logger.error(f"Failed to failover to next source for '{stream_name}'")
-                            break
-                        
-                        # Update current stream info
-                        resp, source_id, current_stream = result
-                        connection_released = False
-                        logger.info(f"Failover successful for '{stream_name}' to source {source_id}")
-                        
-            except asyncio.CancelledError:
-                logger.info(f"Streaming cancelled for '{stream_name}' from {source_id}")
-                raise
-            except Exception as e:
-                logger.error(f"Unexpected error during streaming for '{stream_name}' from {source_id}: {type(e).__name__}: {str(e)}")
-                raise
-            finally:
-                if not connection_released:
-                    try:
-                        resp.close()
-                        await self.connection_manager.release_connection(source_id)
-                        logger.info(f"Released connection for source {source_id} after streaming {chunk_count} chunks")
-                    except Exception as e:
-                        logger.error(f"Error releasing connection for {source_id}: {e}")
-        
-        # Determine media type
-        content_type = resp.headers.get('content-type', '').lower()
-        if current_stream.url.lower().endswith('.ts') or 'mp2t' in content_type:
-            media_type = "video/mp2t"
-        elif 'mpegurl' in content_type:
-            media_type = "application/vnd.apple.mpegurl"
-        else:
-            media_type = "application/octet-stream"
-        
-        return StreamingResponse(
-            generate_stream_with_failover(),
-            media_type=media_type,
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-                "Connection": "keep-alive",
-                "Accept-Ranges": "bytes"
-            }
-        )
-    
-    
-    
     async def test_stream_url(self, url: str) -> bool:
         """Test if a stream URL is accessible"""
         try:
@@ -793,6 +585,294 @@ class StreamRestreamer:
             logger.error(f"Stream test failed for {url}: {e}")
             return False
 
+    async def stream_content(self, stream_id: str):
+        """Stream content for a specific stream with automatic failover"""
+        # Get original stream name from the URL-safe ID
+        stream_name = await self.name_mapper.get_stream_name(stream_id)
+        if not stream_name:
+            # Try to find by direct lookup in grouped streams
+            grouped_streams = self.aggregator.get_grouped_streams()
+            for name in grouped_streams.keys():
+                test_id = await self.name_mapper.get_stream_id(name)
+                if test_id == stream_id:
+                    stream_name = name
+                    break
+            
+            if not stream_name:
+                # Debug: log all available mappings
+                mappings = await self.name_mapper.get_all_mappings()
+                logger.error(f"Stream ID '{stream_id}' not found in mappings. Available: {list(mappings['id_to_name'].keys())}")
+                raise HTTPException(status_code=404, detail=f"Stream ID '{stream_id}' not found")
+        
+        grouped_streams = self.aggregator.get_grouped_streams()
+        
+        # Find stream by original name
+        target_streams = grouped_streams.get(stream_name)
+        if target_streams is None:
+            # Try case-insensitive search
+            stream_name_lower = stream_name.lower()
+            for name, streams in grouped_streams.items():
+                if name.lower() == stream_name_lower:
+                    target_streams = streams
+                    stream_name = name  # Use the correct case
+                    break
+            
+            if target_streams is None:
+                # Debug: log available streams
+                available_streams = list(grouped_streams.keys())
+                logger.error(f"Stream '{stream_name}' not found in sources. Available streams: {available_streams[:10]}...")  # First 10 only
+                raise HTTPException(status_code=404, detail=f"Stream '{stream_name}' not found in sources")
+        
+        logger.info(f"Starting stream for '{stream_name}' with {len(target_streams)} available sources")
+        
+        # Sort streams by connection availability (sources with available connections first)
+        def get_source_availability(stream):
+            source_id = stream.source_id
+            current_conn = self.connection_manager.source_connections.get(source_id, 0)
+            max_conn = self.connection_manager.source_limits.get(source_id, 5)
+            available = max_conn - current_conn
+            return available
+        
+        # Sort by availability (highest first), then by original order as tiebreaker
+        target_streams.sort(key=lambda s: (-get_source_availability(s), target_streams.index(s)))
+        
+        async def try_stream_source(stream_index: int) -> tuple:
+            """Try to connect to a specific stream source with connection limiting"""
+            if stream_index >= len(target_streams):
+                return None, "No more sources available"
+            
+            stream = target_streams[stream_index]
+            source_id = stream.source_id
+            
+            # Check connection availability BEFORE acquiring
+            if not self.connection_manager.can_acquire_connection(source_id):
+                return None, f"Connection limit reached for source {source_id} ({self.connection_manager.source_connections.get(source_id, 0)}/{self.connection_manager.source_limits.get(source_id, 5)})"
+            
+            # Try to acquire connection for this source
+            connection_acquired = await self.connection_manager.acquire_connection(source_id)
+            if not connection_acquired:
+                return None, f"Failed to acquire connection for source {source_id} (concurrent limit reached)"
+            
+            connection_released = False
+            try:
+                logger.info(f"Attempting source {stream_index + 1}/{len(target_streams)}: {source_id} (conns: {self.connection_manager.source_connections.get(source_id, 0)}/{self.connection_manager.source_limits.get(source_id, 5)}) -> {stream.url}")
+                
+                # Test if this is an HLS playlist
+                is_hls_playlist = any(ext in stream.url.lower() for ext in ['.m3u8', '.m3u'])
+                
+                if is_hls_playlist:
+                    # Handle HLS playlist - fetch content and return immediately
+                    async with self.session.get(stream.url, allow_redirects=True, timeout=30) as resp:
+                        if resp.status == 200:
+                            content = await resp.text()
+                            logger.info(f"HLS playlist fetched successfully from {source_id}")
+                            return ("hls", content, source_id, stream), None
+                        else:
+                            return None, f"HTTP {resp.status} from HLS playlist"
+                else:
+                    # Handle direct stream with shorter timeout for initial connection
+                    resp = await self.session.get(
+                        stream.url, 
+                        allow_redirects=True,
+                        timeout=aiohttp.ClientTimeout(connect=15, sock_read=30)
+                    )
+                    
+                    if resp.status == 200:
+                        logger.info(f"Stream connection established to {source_id}")
+                        return ("stream", resp, source_id, stream), None
+                    else:
+                        resp.close()
+                        return None, f"HTTP {resp.status} from stream"
+                        
+            except asyncio.TimeoutError:
+                return None, "Connection timeout"
+            except aiohttp.ClientError as e:
+                return None, f"Client error: {str(e)}"
+            except Exception as e:
+                return None, f"Unexpected error: {str(e)}"
+            finally:
+                # If we return None (failure), release the connection immediately
+                if not connection_released and connection_acquired:
+                    await self.connection_manager.release_connection(source_id)
+                    connection_released = True
+        
+        # Try each source in sequence (now sorted by availability)
+        current_source_index = 0
+        last_error = None
+        successful_connection = None
+        
+        while current_source_index < len(target_streams):
+            result, error = await try_stream_source(current_source_index)
+            
+            if result is not None:
+                successful_connection = result
+                break
+            
+            # This source failed, try next one
+            last_error = error
+            logger.warning(f"Source {current_source_index + 1} failed: {error}")
+            current_source_index += 1
+        
+        if successful_connection is None:
+            # All sources failed
+            error_msg = f"All {len(target_streams)} sources failed for '{stream_name}'. Last error: {last_error}"
+            
+            # Include connection info in error message
+            conn_info = await self.connection_manager.get_connection_info()
+            source_status = []
+            for stream in target_streams:
+                source_id = stream.source_id
+                current = conn_info["source_connections"].get(source_id, 0)
+                max_conn = conn_info["source_limits"].get(source_id, 5)
+                source_status.append(f"{source_id}: {current}/{max_conn}")
+            
+            error_msg += f". Connection status: {', '.join(source_status)}"
+            logger.error(error_msg)
+            raise HTTPException(status_code=503, detail=error_msg)
+        
+        # We have a successful connection
+        stream_type, data, source_id, stream = successful_connection
+        
+        if stream_type == "hls":
+            # HLS content is returned immediately (connection already released in try_stream_source)
+            return PlainTextResponse(content=data, media_type="application/vnd.apple.mpegurl")
+        
+        # We have a live stream connection
+        resp = data
+        
+        async def generate_stream_with_failover():
+            nonlocal current_source_index, resp, source_id, stream
+            current_chunk_count = 0
+            current_source_connected = True
+            connection_released = False
+            
+            try:
+                while True:
+                    try:
+                        if not current_source_connected:
+                            # Try to reconnect to next available source
+                            next_index = current_source_index + 1
+                            while next_index < len(target_streams):
+                                next_stream = target_streams[next_index]
+                                next_source_id = next_stream.source_id
+                                
+                                # Check if this source has available connections
+                                if self.connection_manager.can_acquire_connection(next_source_id):
+                                    result, error = await try_stream_source(next_index)
+                                    if result is not None and result[0] == "stream":
+                                        # Successfully failed over
+                                        resp = result[1]
+                                        source_id = result[2]
+                                        stream = result[3]
+                                        current_source_index = next_index
+                                        current_source_connected = True
+                                        current_chunk_count = 0
+                                        logger.info(f"Failover successful to source {next_index + 1} ({source_id})")
+                                        break
+                                    else:
+                                        logger.warning(f"Failover attempt to source {next_index + 1} failed: {error}")
+                                else:
+                                    logger.debug(f"Skipping source {next_index + 1} ({next_source_id}) - connection limit reached")
+                                
+                                next_index += 1
+                            else:
+                                # No more sources available
+                                logger.error("No more sources available for failover")
+                                break
+                        
+                        # Stream data from current source
+                        async for chunk in resp.content.iter_chunked(8192):
+                            if not chunk:  # Empty chunk indicates end of stream
+                                break
+                                
+                            current_chunk_count += 1
+                            yield chunk
+                            
+                            # Log progress periodically
+                            if current_chunk_count % 1000 == 0:
+                                # Log current connection status
+                                conn_info = await self.connection_manager.get_connection_info()
+                                current_conn = conn_info["source_connections"].get(source_id, 0)
+                                max_conn = conn_info["source_limits"].get(source_id, 5)
+                                logger.debug(f"Streamed {current_chunk_count} chunks from {source_id} (conns: {current_conn}/{max_conn})")
+                        
+                        # If we get here, stream ended normally
+                        logger.info(f"Stream ended normally from {source_id} after {current_chunk_count} chunks")
+                        break
+                        
+                    except (asyncio.TimeoutError, aiohttp.ClientPayloadError) as e:
+                        # These are recoverable errors - try failover
+                        logger.warning(f"Stream error from {source_id}: {type(e).__name__}")
+                        current_source_connected = False
+                        
+                        # Clean up current connection
+                        if not connection_released:
+                            try:
+                                resp.close()
+                                await self.connection_manager.release_connection(source_id)
+                                connection_released = True
+                                logger.info(f"Released connection for {source_id} due to error")
+                            except Exception as e:
+                                logger.error(f"Error releasing connection: {e}")
+                        
+                    except (aiohttp.ClientError, ConnectionError) as e:
+                        # More serious connection errors
+                        logger.error(f"Connection error from {source_id}: {type(e).__name__}: {str(e)}")
+                        current_source_connected = False
+                        
+                        # Clean up current connection
+                        if not connection_released:
+                            try:
+                                resp.close()
+                                await self.connection_manager.release_connection(source_id)
+                                connection_released = True
+                                logger.info(f"Released connection for {source_id} due to connection error")
+                            except Exception as e:
+                                logger.error(f"Error releasing connection: {e}")
+                        
+                    except Exception as e:
+                        # Unexpected errors
+                        logger.error(f"Unexpected error during streaming: {type(e).__name__}: {str(e)}")
+                        break
+            
+            except asyncio.CancelledError:
+                logger.info(f"Streaming cancelled for '{stream_name}'")
+                raise
+            
+            finally:
+                # Ensure connection is released
+                if not connection_released:
+                    try:
+                        resp.close()
+                        await self.connection_manager.release_connection(source_id)
+                        logger.info(f"Released connection for {source_id} after streaming")
+                    except Exception as e:
+                        logger.error(f"Error releasing connection: {e}")
+        
+        # Determine appropriate media type
+        content_type = resp.headers.get('content-type', '').lower()
+        if any(ext in stream.url.lower() for ext in ['.ts', '.m2ts']):
+            media_type = "video/mp2t"
+        elif any(ext in stream.url.lower() for ext in ['.m3u8', '.m3u']):
+            media_type = "application/vnd.apple.mpegurl"
+        elif 'mp4' in content_type or stream.url.lower().endswith('.mp4'):
+            media_type = "video/mp4"
+        else:
+            media_type = "video/mp2t"  # Default to TS
+        
+        # Return streaming response
+        return StreamingResponse(
+            generate_stream_with_failover(),
+            media_type=media_type,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Methods": "GET, HEAD",
+            }
+        )
 
 # Global restreamer instance
 restreamer: Optional[StreamRestreamer] = None
@@ -816,7 +896,7 @@ async def lifespan(app: FastAPI):
 
 # FastAPI application
 app = FastAPI(
-    title="HLS Stream Restreamer",
+    title="KPTV Restreamer",
     description="Restream HLS/TS streams from multiple sources",
     version="1.0.0",
     lifespan=lifespan
@@ -830,6 +910,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Fix route ordering - specific routes first, generic routes last
+@app.get("/")
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "message": "HLS Stream Restreamer API",
+        "version": "1.0.0",
+        "endpoints": {
+            "playlist": "/playlist.m3u8",
+            "status": "/status",
+            "streams": "/streams",
+            "stream": "/stream/{stream_id}",
+            "active_streams": "/active-streams"
+        }
+    }
+
 @app.get("/playlist.m3u8")
 async def get_playlist():
     """Get M3U8 playlist of all streams"""
@@ -838,16 +934,6 @@ async def get_playlist():
     
     playlist = await restreamer.get_m3u8_playlist()
     return PlainTextResponse(content=playlist, media_type="application/vnd.apple.mpegurl")
-
-
-@app.get("/stream/{stream_hash:path}")
-async def stream_channel(stream_hash: str):
-    """Stream a specific channel"""
-    if not restreamer:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-    
-    return await restreamer.stream_content(stream_hash)
-
 
 @app.get("/status")
 async def get_status():
@@ -889,276 +975,195 @@ async def get_active_streams():
         raise HTTPException(status_code=503, detail="Service not initialized")
     
     connection_info = await restreamer.connection_manager.get_connection_info()
+    active_streams = []
+    
+    for source_name, count in connection_info["source_connections"].items():
+        if count > 0:
+            active_streams.append({
+                "source": source_name,
+                "connections": count,
+                "limit": connection_info["source_limits"].get(source_name, 5)
+            })
     
     return {
-        "active_connections": connection_info["total_connections"],
-        "max_connections": connection_info["max_total"],
-        "connections_by_source": connection_info["source_connections"],
-        "availability_by_source": connection_info["source_availability"]
+        "total_active_connections": connection_info["total_connections"],
+        "active_streams": active_streams
     }
 
 @app.get("/streams")
-async def list_streams():
-    """List all available streams"""
+async def get_streams():
+    """Get list of all available streams with metadata"""
     if not restreamer:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
     grouped_streams = restreamer.aggregator.get_grouped_streams()
+    streams_info = []
     
-    streams_list = []
     for name, streams in grouped_streams.items():
         primary_stream = streams[0]
         stream_id = await restreamer.name_mapper.get_stream_id(name)
-        streams_list.append({
+        
+        streams_info.append({
+            "id": stream_id,
             "name": name,
-            "stream_id": stream_id,
-            "url": f"/stream/{stream_id}",
-            "full_url": f"{restreamer.config.public_url.rstrip('/')}/stream/{stream_id}",
-            "sources": len(streams),
-            "category": primary_stream.category,
             "group": primary_stream.group,
-            "logo": primary_stream.logo
+            "logo": primary_stream.logo,
+            "sources": len(streams),
+            "source_names": [s.source_id for s in streams],
+            "url": f"{restreamer.config.public_url.rstrip('/')}/stream/{stream_id}"
         })
     
-    return {"streams": streams_list}
+    return {"streams": streams_info}
 
-@app.get("/direct/{stream_id:path}")
-async def direct_stream_test(stream_id: str):
-    """Test direct access to first source for a stream"""
+@app.get("/stream/{stream_id}")
+async def stream_stream(stream_id: str):
+    """Stream a specific channel"""
     if not restreamer:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
-    stream_name = await restreamer.name_mapper.get_stream_name(stream_id)
-    if not stream_name:
-        raise HTTPException(status_code=404, detail="Stream not found")
-    
-    grouped_streams = restreamer.aggregator.get_grouped_streams()
-    streams = grouped_streams.get(stream_name)
-    
-    if streams:
-        first_stream = streams[0]
-        return Response(status_code=302, headers={"Location": first_stream.url})
-    
-    raise HTTPException(status_code=404, detail="Stream not found")
-    
-@app.get("/test")
-async def test_streams():
-    """Test accessibility of all streams"""
-    if not restreamer:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-    
-    grouped_streams = restreamer.aggregator.get_grouped_streams()
-    results = {}
-    
-    for name, streams in list(grouped_streams.items())[:10]:  # Test first 10 streams
-        stream_hash = restreamer.aggregator.name_mapper.get_hash(name)
-        test_results = []
-        
-        for stream in streams:
-            try:
-                async with restreamer.session.head(stream.url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    is_accessible = resp.status == 200
-                    content_type = resp.headers.get('content-type', 'unknown')
-                    
-                    test_results.append({
-                        "source": stream.source_id,
-                        "url": stream.url,
-                        "accessible": is_accessible,
-                        "status_code": resp.status,
-                        "content_type": content_type,
-                        "stream_type": "HLS" if stream.url.endswith('.m3u8') else "TS" if stream.url.endswith('.ts') else "Unknown"
-                    })
-            except Exception as e:
-                test_results.append({
-                    "source": stream.source_id,
-                    "url": stream.url,
-                    "accessible": False,
-                    "error": str(e),
-                    "stream_type": "HLS" if stream.url.endswith('.m3u8') else "TS" if stream.url.endswith('.ts') else "Unknown"
-                })
-        
-        results[stream_hash] = {
-            "original_name": name,
-            "hash": stream_hash,
-            "our_stream_url": f"/stream/{stream_hash}",
-            "direct_test_url": f"/direct/{stream_hash}",
-            "streams": test_results
-        }
-    
-    return results
+    return await restreamer.stream_content(stream_id)
 
-@app.get("/debug/{stream_id:path}")
-async def debug_stream(stream_id: str):
-    """Debug stream information"""
-    if not restreamer:
-        raise HTTPException(status_code=503, detail="Service not initialized")
-    
-    stream_name = await restreamer.name_mapper.get_stream_name(stream_id)
-    if not stream_name:
-        raise HTTPException(status_code=404, detail="Stream not found")
-    
-    grouped_streams = restreamer.aggregator.get_grouped_streams()
-    streams = grouped_streams.get(stream_name)
-    
-    if streams:
-        debug_info = {
-            "original_name": stream_name,
-            "stream_id": stream_id,
-            "stream_count": len(streams),
-            "streams": []
-        }
-        
-        for i, stream in enumerate(streams):
-            try:
-                async with restreamer.session.head(stream.url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    stream_info = {
-                        "index": i,
-                        "source_id": stream.source_id,
-                        "url": stream.url,
-                        "status_code": resp.status,
-                        "content_type": resp.headers.get('content-type', 'unknown'),
-                        "accessible": resp.status == 200
-                    }
-            except Exception as e:
-                stream_info = {
-                    "index": i,
-                    "source_id": stream.source_id,
-                    "url": stream.url,
-                    "error": str(e),
-                    "accessible": False
-                }
-            
-            debug_info["streams"].append(stream_info)
-        
-        return debug_info
-    
-    raise HTTPException(status_code=404, detail="Stream not found")
-
-
-@app.get("/mappings")
-async def get_stream_mappings():
-    """Get stream name to ID mappings"""
+@app.get("/debug/mappings")
+async def debug_mappings():
+    """Debug endpoint to see name mappings"""
     if not restreamer:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
     return await restreamer.name_mapper.get_all_mappings()
 
-@app.get("/find/{search_term:path}")
-async def find_streams(search_term: str):
-    """Find streams by name"""
+@app.get("/debug/streams/{source_name}")
+async def debug_source_streams(source_name: str):
+    """Debug endpoint to see streams from a specific source"""
+    if not restreamer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    source = restreamer.aggregator.sources.get(source_name)
+    if not source:
+        raise HTTPException(status_code=404, detail=f"Source '{source_name}' not found")
+    
+    return {
+        "source": source_name,
+        "streams": [{"name": s.name, "url": s.url} for s in source.streams.values()]
+    }
+
+@app.get("/debug/grouped-streams")
+async def debug_grouped_streams():
+    """Debug endpoint to see grouped streams"""
     if not restreamer:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
     grouped_streams = restreamer.aggregator.get_grouped_streams()
-    matches = []
     
-    for name in grouped_streams.keys():
-        if search_term.lower() in name.lower():
-            stream_id = await restreamer.name_mapper.get_stream_id(name)
-            matches.append({
-                "original_name": name,
-                "stream_id": stream_id,
-                "url": f"/stream/{stream_id}",
-                "full_url": f"{restreamer.config.public_url.rstrip('/')}/stream/{stream_id}"
-            })
+    result = {}
+    for name, streams in grouped_streams.items():
+        stream_id = await restreamer.name_mapper.get_stream_id(name)
+        result[name] = {
+            "id": stream_id,
+            "sources": [s.source_id for s in streams],
+            "urls": [s.url for s in streams]
+        }
     
-    return {"search_term": search_term, "matches": matches}
+    return result
 
 
 def load_config(config_path: str) -> AppConfig:
-    """Load configuration from file"""
-    path = Path(config_path)
+    """Load configuration from YAML file"""
+    config_file = Path(config_path)
     
-    if not path.exists():
-        # Create default config
-        default_config = {
-            'sources': [
-                {
-                    'name': 'example_xtream',
-                    'type': 'xtream',
-                    'url': 'http://example.com:8080',
-                    'username': 'your_username',
-                    'password': 'your_password',
-                    'max_connections': 5,
-                    'refresh_interval': 300,
-                    'enabled': False
-                },
-                {
-                    'name': 'example_m3u',
-                    'type': 'm3u',
-                    'url': 'http://example.com/playlist.m3u',
-                    'max_connections': 3,
-                    'refresh_interval': 600,
-                    'enabled': False
-                }
-            ],
-            'filters': {
-                'include_name_patterns': [],
-                'include_stream_patterns': [],
-                'exclude_name_patterns': ['.*test.*'],
-                'exclude_stream_patterns': []
-            },
-            'max_total_connections': 100,
-            'bind_host': '0.0.0.0',
-            'bind_port': 8080,
-            'public_url': 'http://localhost:8080',
-            'log_level': 'INFO'
-        }
-        
-        with open(config_path, 'w') as f:
-            yaml.dump(default_config, f, default_flow_style=False)
-        
-        logger.info(f"Created default config at {config_path}")
-        return AppConfig()
+    if not config_file.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
     
-    with open(config_path, 'r') as f:
-        if config_path.endswith('.json'):
-            data = json.load(f)
-        else:
-            data = yaml.safe_load(f)
+    with open(config_file, 'r') as f:
+        config_data = yaml.safe_load(f)
     
-    # Convert to dataclasses
-    sources = [SourceConfig(**s) for s in data.get('sources', [])]
-    filters = FilterConfig(**data.get('filters', {}))
+    # Parse sources
+    sources = []
+    for source_data in config_data.get('sources', []):
+        sources.append(SourceConfig(
+            name=source_data['name'],
+            type=source_data['type'],
+            url=source_data['url'],
+            username=source_data.get('username'),
+            password=source_data.get('password'),
+            max_connections=source_data.get('max_connections', 5),
+            refresh_interval=source_data.get('refresh_interval', 300),
+            enabled=source_data.get('enabled', True)
+        ))
     
+    # Parse filters
+    filter_data = config_data.get('filters', {})
+    filters = FilterConfig(
+        include_name_patterns=filter_data.get('include_name_patterns', []),
+        include_stream_patterns=filter_data.get('include_stream_patterns', []),
+        exclude_name_patterns=filter_data.get('exclude_name_patterns', []),
+        exclude_stream_patterns=filter_data.get('exclude_stream_patterns', [])
+    )
+    
+    # Parse main config
     return AppConfig(
         sources=sources,
         filters=filters,
-        max_total_connections=data.get('max_total_connections', 100),
-        bind_host=data.get('bind_host', '0.0.0.0'),
-        bind_port=data.get('bind_port', 8080),
-        public_url=data.get('public_url', 'http://localhost:8080'),
-        log_level=data.get('log_level', 'INFO')
+        max_total_connections=config_data.get('max_total_connections', 100),
+        bind_host=config_data.get('bind_host', '0.0.0.0'),
+        bind_port=config_data.get('bind_port', 8080),
+        public_url=config_data.get('public_url', 'http://localhost:8080'),
+        log_level=config_data.get('log_level', 'INFO')
     )
+
 
 def main():
     """Main entry point"""
-    global restreamer
-    
-    parser = argparse.ArgumentParser(description='HLS Stream Restreamer')
-    parser.add_argument('--config', '-c', default='config.yaml',
-                       help='Configuration file path')
+    parser = argparse.ArgumentParser(description="HLS Stream Restreamer")
+    parser.add_argument(
+        "--config", 
+        default="config.yaml", 
+        help="Path to configuration file (default: config.yaml)"
+    )
+    parser.add_argument(
+        "--host",
+        help="Override bind host from config"
+    )
+    parser.add_argument(
+        "--port", 
+        type=int,
+        help="Override bind port from config"
+    )
     
     args = parser.parse_args()
     
-    # Load configuration
-    config = load_config(args.config)
+    try:
+        # Load configuration
+        config = load_config(args.config)
+        
+        # Apply command line overrides
+        if args.host:
+            config.bind_host = args.host
+        if args.port:
+            config.bind_port = args.port
+        
+        # Set log level
+        logging.getLogger().setLevel(getattr(logging, config.log_level.upper()))
+        
+        # Create and set global restreamer instance
+        global restreamer
+        restreamer = StreamRestreamer(config)
+        
+        # Start server
+        logger.info(f"Starting server on {config.bind_host}:{config.bind_port}")
+        uvicorn.run(
+            app,
+            host=config.bind_host,
+            port=config.bind_port,
+            log_level=config.log_level.lower()
+        )
     
-    # Setup logging
-    logging.getLogger().setLevel(getattr(logging, config.log_level.upper()))
-    
-    # Create restreamer instance
-    restreamer = StreamRestreamer(config)
-    
-    # Run server
-    uvicorn.run(
-        app,
-        host=config.bind_host,
-        port=config.bind_port,
-        log_level=config.log_level.lower()
-    )
+    except FileNotFoundError as e:
+        logger.error(f"Configuration error: {e}")
+        logger.info("Create a config.yaml file or specify a different path with --config")
+    except Exception as e:
+        logger.error(f"Failed to start: {e}")
+        raise
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-    
