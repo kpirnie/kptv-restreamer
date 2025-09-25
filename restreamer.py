@@ -633,8 +633,10 @@ class StreamRestreamer:
             available = max_conn - current_conn
             return available
         
-        # Sort by availability (highest first), then by original order as tiebreaker
-        target_streams.sort(key=lambda s: (-get_source_availability(s), target_streams.index(s)))
+        # Sort by availability (highest first), capturing original indices first
+        indexed_streams = [(i, stream) for i, stream in enumerate(target_streams)]
+        indexed_streams.sort(key=lambda x: (-get_source_availability(x[1]), x[0]))
+        target_streams = [stream for _, stream in indexed_streams]
         
         async def try_stream_source(stream_index: int) -> tuple:
             """Try to connect to a specific stream source with connection limiting"""
