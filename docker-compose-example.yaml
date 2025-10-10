@@ -1,7 +1,6 @@
 services:
   kptest:
-    #image: ghcr.io/kpirnie/kptv-restreamer:latest
-    image: localhost/kptest:latest
+    image: ghcr.io/kpirnie/kptv-restreamer:latest
     container_name: kptest
     hostname: kptest
     restart: unless-stopped
