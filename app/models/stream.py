@@ -25,6 +25,7 @@ class SourceConfig:
     max_connections: int = 5
     refresh_interval: int = 300  # seconds
     enabled: bool = True
+    exp_date: Optional[str] = None
 
 
 @dataclass
@@ -37,6 +38,14 @@ class FilterConfig:
 
 
 @dataclass
+class XtreamAuthConfig:
+    """Xtream API authentication configuration"""
+    enabled: bool = False
+    username: str = "admin"
+    password: str = "admin"
+
+
+@dataclass
 class AppConfig:
     """Main application configuration"""
     sources: List[SourceConfig] = field(default_factory=list)
@@ -46,3 +55,4 @@ class AppConfig:
     bind_port: int = 8080
     public_url: str = "http://localhost:8080"
     log_level: str = "INFO"
+    xtream_auth: XtreamAuthConfig = field(default_factory=XtreamAuthConfig)

@@ -308,7 +308,12 @@ Returns user and server information for Xtream Codes API.
 """
 def get_user_info(restreamer):
 
-    print(restreamer.aggregator.sources.items())
+    # Get exp_date from first available Xtream source
+    exp_date = "9999999999"
+    for source_name, source in restreamer.aggregator.sources.items():
+        if hasattr(source.config, 'exp_date') and source.config.exp_date:
+            exp_date = source.config.exp_date
+            break
 
     return {
         "user_info": {
@@ -317,7 +322,7 @@ def get_user_info(restreamer):
             "message": "Welcome to KPTV Restreamer",
             "auth": 1,
             "status": "Active",
-            "exp_date": "9999999999",
+            "exp_date": exp_date,
             "is_trial": "0",
             "active_cons": "0",
             "created_at": "0",

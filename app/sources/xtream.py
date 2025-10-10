@@ -13,6 +13,22 @@ class XtreamSource(StreamSource):
         streams = []
         
         live_url = f"{self.config.url}/player_api.php"
+        
+        # Get user info to retrieve exp_date
+        try:
+            user_params = {
+                'username': self.config.username,
+                'password': self.config.password
+            }
+            async with self.session.get(live_url, params=user_params) as resp:
+                if resp.status == 200:
+                    user_data = await resp.json()
+                    if 'user_info' in user_data:
+                        self.config.exp_date = user_data['user_info'].get('exp_date', '9999999999')
+        except Exception as e:
+            logger.error(f"Failed to fetch user info: {e}")
+            self.config.exp_date = '9999999999'
+        
         params = {
             'username': self.config.username,
             'password': self.config.password,

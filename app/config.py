@@ -14,7 +14,7 @@ structured configuration objects.
 # setup the imports
 import yaml
 from pathlib import Path
-from app.models import AppConfig, SourceConfig, FilterConfig
+from app.models import AppConfig, SourceConfig, FilterConfig, XtreamAuthConfig
 
 """
 Load and parse configuration from YAML file
@@ -51,7 +51,8 @@ def load_config(config_path: str) -> AppConfig:
             password=source_data.get('password'),
             max_connections=source_data.get('max_connections', 5),
             refresh_interval=source_data.get('refresh_interval', 300),
-            enabled=source_data.get('enabled', True)
+            enabled=source_data.get('enabled', True),
+            exp_date=None 
         ))
     
     # setup and hold the filters
@@ -62,6 +63,14 @@ def load_config(config_path: str) -> AppConfig:
         exclude_name_patterns=filter_data.get('exclude_name_patterns', []),
         exclude_stream_patterns=filter_data.get('exclude_stream_patterns', [])
     )
+
+    # setup xtream auth config
+    xtream_auth_data = config_data.get('xtream_auth', {})
+    xtream_auth = XtreamAuthConfig(
+        enabled=xtream_auth_data.get('enabled', False),
+        username=xtream_auth_data.get('username', 'admin'),
+        password=xtream_auth_data.get('password', 'admin')
+    )
     
     # return the applications configuration with defaults if necessary
     return AppConfig(
@@ -71,5 +80,6 @@ def load_config(config_path: str) -> AppConfig:
         bind_host=config_data.get('bind_host', '0.0.0.0'),
         bind_port=config_data.get('bind_port', 8080),
         public_url=config_data.get('public_url', 'http://localhost:8080'),
-        log_level=config_data.get('log_level', 'INFO')
+        log_level=config_data.get('log_level', 'INFO'),
+        xtream_auth=xtream_auth
     )

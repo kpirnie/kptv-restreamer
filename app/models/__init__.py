@@ -1,3 +1,3 @@
-from .stream import StreamInfo, SourceConfig, FilterConfig, AppConfig
+from .stream import StreamInfo, SourceConfig, FilterConfig, AppConfig, XtreamAuthConfig
 
-__all__ = ["StreamInfo", "SourceConfig", "FilterConfig", "AppConfig"]
+__all__ = ["StreamInfo", "SourceConfig", "FilterConfig", "AppConfig", "XtreamAuthConfig"]
