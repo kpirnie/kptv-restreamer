@@ -172,61 +172,50 @@ class StreamRestreamer:
                 continue
             
             try:
-                is_hls = any(ext in stream.url.lower() for ext in ['.m3u8', '.m3u'])
+                cached_stream = await self.stream_cache.get_or_create_stream(
+                    stream_name=stream_name,
+                    stream_url=stream.url,
+                    source_id=source_id,
+                    media_type=self._get_media_type(stream.url)
+                )
                 
-                if is_hls:
-                    async with self.session.get(stream.url, timeout=30) as resp:
-                        if resp.status == 200:
-                            content = await resp.text()
-                            return PlainTextResponse(
-                                content=content, 
-                                media_type="application/vnd.apple.mpegurl"
-                            )
-                else:
-                    cached_stream = await self.stream_cache.get_or_create_stream(
-                        stream_name=stream_name,
-                        stream_url=stream.url,
-                        source_id=source_id,
-                        media_type=self._get_media_type(stream.url)
-                    )
-                    
-                    if cached_stream.connection_error:
-                        raise Exception(cached_stream.connection_error)
-                    
-                    consumer_id = cached_stream.get_next_consumer_id()
-                    
-                    logger.info(f"Serving stream '{stream_name}' from cache (consumer {consumer_id})")
-                    
-                    async def generate_from_cache():
-                        try:
-                            start_pos = cached_stream.buffer.buffer_position
+                if cached_stream.connection_error:
+                    raise Exception(cached_stream.connection_error)
+                
+                consumer_id = cached_stream.get_next_consumer_id()
+                
+                logger.info(f"Serving stream '{stream_name}' from cache (consumer {consumer_id})")
+                
+                async def generate_from_cache():
+                    try:
+                        start_pos = cached_stream.buffer.buffer_position
+                        
+                        async for chunk in cached_stream.buffer.consume_from(
+                            consumer_id, start_pos
+                        ):
+                            yield chunk
                             
-                            async for chunk in cached_stream.buffer.consume_from(
-                                consumer_id, start_pos
-                            ):
-                                yield chunk
-                                
-                        except asyncio.CancelledError:
-                            logger.info(f"Consumer {consumer_id} cancelled for '{stream_name}'")
-                            raise
-                        except Exception as e:
-                            logger.error(f"Error in consumer {consumer_id}: {e}")
-                            raise
-                    
-                    media_type = self._get_media_type(stream.url)
-                    
-                    return StreamingResponse(
-                        generate_from_cache(),
-                        media_type=media_type,
-                        headers={
-                            "Cache-Control": "no-cache, no-store, must-revalidate",
-                            "Pragma": "no-cache",
-                            "Expires": "0",
-                            "Access-Control-Allow-Origin": "*",
-                            "Access-Control-Allow-Headers": "*",
-                            "Access-Control-Allow-Methods": "GET, HEAD",
-                        }
-                    )
+                    except asyncio.CancelledError:
+                        logger.info(f"Consumer {consumer_id} cancelled for '{stream_name}'")
+                        raise
+                    except Exception as e:
+                        logger.error(f"Error in consumer {consumer_id}: {e}")
+                        raise
+                
+                media_type = self._get_media_type(stream.url)
+                
+                return StreamingResponse(
+                    generate_from_cache(),
+                    media_type=media_type,
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0",
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Headers": "*",
+                        "Access-Control-Allow-Methods": "GET, HEAD",
+                    }
+                )
             
             except Exception as e:
                 last_error = str(e)
@@ -236,7 +225,7 @@ class StreamRestreamer:
         error_msg = f"All {len(target_streams)} sources failed for '{stream_name}'. Last error: {last_error}"
         logger.error(error_msg)
         raise HTTPException(status_code=503, detail=error_msg)
-    
+
     def _get_media_type(self, url: str) -> str:
         """Determine media type from URL"""
         url_lower = url.lower()
