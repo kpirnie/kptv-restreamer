@@ -1,17 +1,44 @@
+#!/usr/bin/env python3
+"""
+Xtream Codes API Routes Module
+
+This module provides Xtream Codes API compatibility endpoints for the KPTV Restreamer.
+It implements the standard Xtream Codes API interface for IPTV player compatibility.
+
+@package KPTV Restreamer
+@author Kevin Pirnie <me@kpirnie.com>
+@copyright Copyright (c) 2025
+"""
+
+# setup the imports
 import logging
 from fastapi import APIRouter, HTTPException, Request, Query
 from typing import Optional
 
+# setup the logger
 logger = logging.getLogger(__name__)
 
+# setup the router
 router = APIRouter()
 
+"""
+Get restreamer instance from application state
 
+@param request: Request FastAPI request object
+@return StreamRestreamer: Restreamer instance from app state
+"""
 def get_restreamer(request: Request):
     """Get restreamer instance from app state"""
     return request.app.state.restreamer
 
+"""
+Check Xtream API authentication credentials
 
+@param restreamer: StreamRestreamer Restreamer instance
+@param username: str Username for authentication
+@param password: str Password for authentication
+@return bool: True if authentication successful or disabled
+"""
 def check_auth(restreamer, username: str, password: str) -> bool:
     """Check if credentials are valid"""
     if not restreamer.config.xtream_auth.enabled:
@@ -20,7 +47,19 @@ def check_auth(restreamer, username: str, password: str) -> bool:
     return (username == restreamer.config.xtream_auth.username and 
             password == restreamer.config.xtream_auth.password)
 
+"""
+Xtream Codes API endpoint
 
+Main API endpoint that handles all Xtream Codes API actions including
+stream listings, categories, and user information.
+
+@param request: Request FastAPI request object
+@param username: str Xtream API username
+@param password: str Xtream API password
+@param action: str API action to perform
+@return dict: Response data based on requested action
+@throws HTTPException: 503 if service not initialized, 401 if auth failed
+"""
 @router.get("/player_api.php")
 async def player_api(
     request: Request,
@@ -56,7 +95,14 @@ async def player_api(
         # Return user info when no action specified
         return get_user_info(restreamer)
 
+"""
+Get all live streams in Xtream format
 
+Returns live streams formatted for Xtream Codes API compatibility.
+
+@param restreamer: StreamRestreamer Restreamer instance
+@return list: Formatted live streams data
+"""
 async def get_live_streams(restreamer):
     """Get all live streams in Xtream format"""
     grouped_streams = restreamer.aggregator.get_grouped_streams()
@@ -89,7 +135,14 @@ async def get_live_streams(restreamer):
     
     return streams
 
+"""
+Get all VOD streams in Xtream format
 
+Returns video-on-demand streams formatted for Xtream Codes API.
+
+@param restreamer: StreamRestreamer Restreamer instance
+@return list: Formatted VOD streams data
+"""
 async def get_vod_streams(restreamer):
     """Get all VOD streams in Xtream format"""
     grouped_streams = restreamer.aggregator.get_grouped_streams()
@@ -119,7 +172,14 @@ async def get_vod_streams(restreamer):
     
     return streams
 
+"""
+Get all series in Xtream format
 
+Returns series content formatted for Xtream Codes API.
+
+@param restreamer: StreamRestreamer Restreamer instance
+@return list: Formatted series data
+"""
 async def get_series(restreamer):
     """Get all series in Xtream format"""
     grouped_streams = restreamer.aggregator.get_grouped_streams()
@@ -154,7 +214,14 @@ async def get_series(restreamer):
     
     return series
 
+"""
+Get all live stream categories
 
+Returns live stream categories for Xtream Codes API.
+
+@param restreamer: StreamRestreamer Restreamer instance
+@return list: Live stream categories
+"""
 async def get_live_categories(restreamer):
     """Get all live stream categories"""
     grouped_streams = restreamer.aggregator.get_grouped_streams()
@@ -175,7 +242,14 @@ async def get_live_categories(restreamer):
     
     return list(categories.values())
 
+"""
+Get all VOD categories
 
+Returns video-on-demand categories for Xtream Codes API.
+
+@param restreamer: StreamRestreamer Restreamer instance
+@return list: VOD categories
+"""
 async def get_vod_categories(restreamer):
     """Get all VOD categories"""
     grouped_streams = restreamer.aggregator.get_grouped_streams()
@@ -196,7 +270,14 @@ async def get_vod_categories(restreamer):
     
     return list(categories.values())
 
+"""
+Get all series categories
 
+Returns series categories for Xtream Codes API.
+
+@param restreamer: StreamRestreamer Restreamer instance
+@return list: Series categories
+"""
 async def get_series_categories(restreamer):
     """Get all series categories"""
     grouped_streams = restreamer.aggregator.get_grouped_streams()
@@ -217,9 +298,18 @@ async def get_series_categories(restreamer):
     
     return list(categories.values())
 
+"""
+Get Xtream API user information
 
+Returns user and server information for Xtream Codes API.
+
+@param restreamer: StreamRestreamer Restreamer instance
+@return dict: User and server information
+"""
 def get_user_info(restreamer):
-    """Get user info"""
+
+    print(restreamer.aggregator.sources.items())
+
     return {
         "user_info": {
             "username": restreamer.config.xtream_auth.username,
@@ -246,7 +336,19 @@ def get_user_info(restreamer):
         }
     }
 
+"""
+Stream live content via Xtream format URL
 
+Xtream-compatible endpoint for streaming live content with authentication.
+
+@param username: str Xtream API username
+@param password: str Xtream API password
+@param stream_id: str Stream identifier
+@param ext: str File extension (ts, m3u8, etc)
+@param request: Request FastAPI request object
+@return StreamingResponse: Stream content
+@throws HTTPException: 503 if service not initialized, 401 if auth failed
+"""
 @router.get("/live/{username}/{password}/{stream_id}.{ext}")
 async def stream_live(
     username: str,
@@ -265,7 +367,19 @@ async def stream_live(
     
     return await restreamer.stream_content(stream_id)
 
+"""
+Stream VOD content via Xtream format URL
 
+Xtream-compatible endpoint for streaming video-on-demand content.
+
+@param username: str Xtream API username
+@param password: str Xtream API password
+@param stream_id: str Stream identifier
+@param ext: str File extension
+@param request: Request FastAPI request object
+@return StreamingResponse: Stream content
+@throws HTTPException: 503 if service not initialized, 401 if auth failed
+"""
 @router.get("/movie/{username}/{password}/{stream_id}.{ext}")
 async def stream_movie(
     username: str,
@@ -284,7 +398,19 @@ async def stream_movie(
     
     return await restreamer.stream_content(stream_id)
 
+"""
+Stream series content via Xtream format URL
 
+Xtream-compatible endpoint for streaming series content.
+
+@param username: str Xtream API username
+@param password: str Xtream API password
+@param stream_id: str Stream identifier
+@param ext: str File extension
+@param request: Request FastAPI request object
+@return StreamingResponse: Stream content
+@throws HTTPException: 503 if service not initialized, 401 if auth failed
+"""
 @router.get("/series/{username}/{password}/{stream_id}.{ext}")
 async def stream_series(
     username: str,

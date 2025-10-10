@@ -1,17 +1,43 @@
+#!/usr/bin/env python3
+"""
+API Routes Module
+
+This module defines all the REST API endpoints for the KPTV Restreamer application.
+It includes endpoints for streaming, status monitoring, cache management, and debugging.
+
+@package KPTV Restreamer
+@author Kevin Pirnie <me@kpirnie.com>
+@copyright Copyright (c) 2025
+"""
+
+# imports
 import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
+# setup the logger
 logger = logging.getLogger(__name__)
 
+# setup the api router
 router = APIRouter()
 
+"""
+Get restreamer instance from application state
 
+@param request: Request FastAPI request object
+@return StreamRestreamer: Restreamer instance from app state
+"""
 def get_restreamer(request: Request):
     """Get restreamer instance from app state"""
     return request.app.state.restreamer
 
+"""
+Root endpoint with API information
 
+Provides basic API information and available endpoints
+
+@return dict: API information and available endpoints
+"""
 @router.get("/")
 async def root():
     """Root endpoint with API information"""
@@ -28,7 +54,16 @@ async def root():
         }
     }
 
+"""
+Get M3U8 playlist of all available streams
 
+Returns a complete M3U8 playlist containing all aggregated streams
+from all configured sources.
+
+@param request: Request FastAPI request object
+@return PlainTextResponse: M3U8 playlist content
+@throws HTTPException: 503 if service not initialized
+"""
 @router.get("/playlist.m3u8")
 async def get_playlist(request: Request):
     """Get M3U8 playlist of all streams"""
@@ -39,7 +74,15 @@ async def get_playlist(request: Request):
     playlist = await restreamer.get_m3u8_playlist()
     return PlainTextResponse(content=playlist, media_type="application/vnd.apple.mpegurl")
 
+"""
+Get comprehensive service status information
 
+Returns detailed status including source information, connection counts,
+and stream statistics.
+
+@param request: Request FastAPI request object
+@return dict: Comprehensive service status information
+"""
 @router.get("/status")
 async def get_status(request: Request):
     """Get service status"""
@@ -74,7 +117,16 @@ async def get_status(request: Request):
         "source_details": source_status
     }
 
+"""
+Get detailed stream cache status information
 
+Returns information about currently cached streams, including consumer counts,
+buffer sizes, and error status.
+
+@param request: Request FastAPI request object
+@return dict: Cache status with detailed stream information
+@throws HTTPException: 503 if service not initialized
+"""
 @router.get("/cache-status")
 async def get_cache_status(request: Request):
     """Get stream cache status"""
@@ -108,7 +160,15 @@ async def get_cache_status(request: Request):
         "note": "Each cached stream represents 1 connection to the provider, served to multiple consumers"
     }
 
+"""
+Get information about currently active streams
 
+Returns connection information for streams that are currently being served.
+
+@param request: Request FastAPI request object
+@return dict: Active streams and connection information
+@throws HTTPException: 503 if service not initialized
+"""
 @router.get("/active-streams")
 async def get_active_streams(request: Request):
     """Get information about currently active streams"""
@@ -132,7 +192,16 @@ async def get_active_streams(request: Request):
         "active_streams": active_streams
     }
 
+"""
+Get list of all available streams with metadata
 
+Returns detailed information about all available streams including
+source information and stream URLs.
+
+@param request: Request FastAPI request object
+@return dict: List of all available streams with metadata
+@throws HTTPException: 503 if service not initialized
+"""
 @router.get("/streams")
 async def get_streams(request: Request):
     """Get list of all available streams with metadata"""
@@ -159,7 +228,16 @@ async def get_streams(request: Request):
     
     return {"streams": streams_info}
 
+"""
+Stream a specific channel
 
+Initiates streaming of a specific channel by stream ID.
+
+@param stream_id: str Unique identifier for the stream
+@param request: Request FastAPI request object
+@return StreamingResponse: Stream content response
+@throws HTTPException: 503 if service not initialized
+"""
 @router.get("/stream/{stream_id}")
 async def stream_stream(stream_id: str, request: Request):
     """Stream a specific channel"""
@@ -169,7 +247,15 @@ async def stream_stream(stream_id: str, request: Request):
     
     return await restreamer.stream_content(stream_id)
 
+"""
+Debug endpoint to see name mappings
 
+Returns internal name-to-ID mappings for debugging purposes.
+
+@param request: Request FastAPI request object
+@return dict: All name mappings
+@throws HTTPException: 503 if service not initialized
+"""
 @router.get("/debug/mappings")
 async def debug_mappings(request: Request):
     """Debug endpoint to see name mappings"""
@@ -179,7 +265,16 @@ async def debug_mappings(request: Request):
     
     return await restreamer.name_mapper.get_all_mappings()
 
+"""
+Debug endpoint to see streams from a specific source
 
+Returns streams available from a specific source for debugging.
+
+@param source_name: str Name of the source to inspect
+@param request: Request FastAPI request object
+@return dict: Source streams information
+@throws HTTPException: 404 if source not found, 503 if service not initialized
+"""
 @router.get("/debug/streams/{source_name}")
 async def debug_source_streams(source_name: str, request: Request):
     """Debug endpoint to see streams from a specific source"""
@@ -196,7 +291,15 @@ async def debug_source_streams(source_name: str, request: Request):
         "streams": [{"name": s.name, "url": s.url} for s in source.streams.values()]
     }
 
+"""
+Debug endpoint to see grouped streams
 
+Returns internally grouped streams for debugging aggregation.
+
+@param request: Request FastAPI request object
+@return dict: Grouped streams information
+@throws HTTPException: 503 if service not initialized
+"""
 @router.get("/debug/grouped-streams")
 async def debug_grouped_streams(request: Request):
     """Debug endpoint to see grouped streams"""

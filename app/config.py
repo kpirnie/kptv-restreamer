@@ -1,18 +1,46 @@
+#!/usr/bin/env python3
+"""
+Configuration Loader Module
+
+This module handles loading and parsing of YAML configuration files
+for the KPTV Restreamer application. It converts raw YAML data into
+structured configuration objects.
+
+@package KPTV Restreamer
+@author Kevin Pirnie <me@kpirnie.com>
+@copyright Copyright (c) 2025
+"""
+
+# setup the imports
 import yaml
 from pathlib import Path
 from app.models import AppConfig, SourceConfig, FilterConfig
 
+"""
+Load and parse configuration from YAML file
 
+Reads the specified YAML configuration file, validates its existence,
+and converts the data into structured configuration objects for use
+throughout the application.
+
+@param config_path: str Path to the YAML configuration file
+@return AppConfig: Fully populated application configuration object
+@throws FileNotFoundError: When the specified config file does not exist
+"""
 def load_config(config_path: str) -> AppConfig:
-    """Load configuration from YAML file"""
+
+    # load the confi file
     config_file = Path(config_path)
     
+    # make sure it actually exists
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
     
+    # now open it grab the data as yaml
     with open(config_file, 'r') as f:
         config_data = yaml.safe_load(f)
     
+    # setup and hold the sources
     sources = []
     for source_data in config_data.get('sources', []):
         sources.append(SourceConfig(
@@ -26,6 +54,7 @@ def load_config(config_path: str) -> AppConfig:
             enabled=source_data.get('enabled', True)
         ))
     
+    # setup and hold the filters
     filter_data = config_data.get('filters', {})
     filters = FilterConfig(
         include_name_patterns=filter_data.get('include_name_patterns', []),
@@ -34,6 +63,7 @@ def load_config(config_path: str) -> AppConfig:
         exclude_stream_patterns=filter_data.get('exclude_stream_patterns', [])
     )
     
+    # return the applications configuration with defaults if necessary
     return AppConfig(
         sources=sources,
         filters=filters,
