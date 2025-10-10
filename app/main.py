@@ -43,9 +43,8 @@ def create_app(config: AppConfig) -> tuple[FastAPI, StreamRestreamer]:
     app.state.restreamer = restreamer_instance
     
     from app.api.routes import router
-    app.include_router(router)
-
     from app.api.xtream_routes import router as xtream_router
+    app.include_router(router)
     app.include_router(xtream_router)
         
     return app, restreamer_instance
@@ -94,3 +93,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    

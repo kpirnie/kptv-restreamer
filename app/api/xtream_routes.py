@@ -1,0 +1,304 @@
+import logging
+from fastapi import APIRouter, HTTPException, Request, Query
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+def get_restreamer(request: Request):
+    """Get restreamer instance from app state"""
+    return request.app.state.restreamer
+
+
+def check_auth(restreamer, username: str, password: str) -> bool:
+    """Check if credentials are valid"""
+    if not restreamer.config.xtream_auth.enabled:
+        return True
+    
+    return (username == restreamer.config.xtream_auth.username and 
+            password == restreamer.config.xtream_auth.password)
+
+
+@router.get("/player_api.php")
+async def player_api(
+    request: Request,
+    username: Optional[str] = Query(None),
+    password: Optional[str] = Query(None),
+    action: Optional[str] = Query(None)
+):
+    """Xtream Codes API endpoint"""
+    restreamer = get_restreamer(request)
+    if not restreamer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    # Authentication check
+    if not username or not password:
+        raise HTTPException(status_code=401, detail="Missing credentials")
+    
+    if not check_auth(restreamer, username, password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    if action == "get_live_streams":
+        return await get_live_streams(restreamer)
+    elif action == "get_vod_streams":
+        return await get_vod_streams(restreamer)
+    elif action == "get_series":
+        return await get_series(restreamer)
+    elif action == "get_live_categories":
+        return await get_live_categories(restreamer)
+    elif action == "get_vod_categories":
+        return await get_vod_categories(restreamer)
+    elif action == "get_series_categories":
+        return await get_series_categories(restreamer)
+    else:
+        # Return user info when no action specified
+        return get_user_info(restreamer)
+
+
+async def get_live_streams(restreamer):
+    """Get all live streams in Xtream format"""
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    streams = []
+    
+    for name, stream_list in grouped_streams.items():
+        primary_stream = stream_list[0]
+        stream_id = await restreamer.name_mapper.get_stream_id(name)
+        
+        # Only include non-VOD, non-series streams
+        if "(Series)" not in name and not any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']):
+            streams.append({
+                "num": len(streams) + 1,
+                "name": name,
+                "stream_type": "live",
+                "stream_id": stream_id,
+                "stream_icon": primary_stream.logo or "",
+                "epg_channel_id": "",
+                "added": "0",
+                "category_name": primary_stream.group or "Uncategorized",
+                "category_id": str(hash(primary_stream.group or "Uncategorized") % 10000),
+                "series_no": None,
+                "live": "1",
+                "container_extension": "ts",
+                "custom_sid": "",
+                "tv_archive": 0,
+                "direct_source": "",
+                "tv_archive_duration": 0
+            })
+    
+    return streams
+
+
+async def get_vod_streams(restreamer):
+    """Get all VOD streams in Xtream format"""
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    streams = []
+    
+    for name, stream_list in grouped_streams.items():
+        primary_stream = stream_list[0]
+        stream_id = await restreamer.name_mapper.get_stream_id(name)
+        
+        # Only include VOD streams (mp4, mkv, etc)
+        if any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']) and "(Series)" not in name:
+            streams.append({
+                "num": len(streams) + 1,
+                "name": name,
+                "stream_type": "movie",
+                "stream_id": stream_id,
+                "stream_icon": primary_stream.logo or "",
+                "rating": "0",
+                "rating_5based": 0,
+                "added": "0",
+                "category_name": primary_stream.group or "Uncategorized",
+                "category_id": str(hash(primary_stream.group or "Uncategorized") % 10000),
+                "container_extension": "mp4",
+                "custom_sid": "",
+                "direct_source": ""
+            })
+    
+    return streams
+
+
+async def get_series(restreamer):
+    """Get all series in Xtream format"""
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    series = []
+    
+    for name, stream_list in grouped_streams.items():
+        primary_stream = stream_list[0]
+        stream_id = await restreamer.name_mapper.get_stream_id(name)
+        
+        # Only include series
+        if "(Series)" in name:
+            clean_name = name.replace(" (Series)", "")
+            series.append({
+                "num": len(series) + 1,
+                "name": clean_name,
+                "series_id": stream_id,
+                "cover": primary_stream.logo or "",
+                "plot": "",
+                "cast": "",
+                "director": "",
+                "genre": primary_stream.group or "Uncategorized",
+                "releaseDate": "",
+                "last_modified": "0",
+                "rating": "0",
+                "rating_5based": 0,
+                "backdrop_path": [],
+                "youtube_trailer": "",
+                "episode_run_time": "0",
+                "category_id": str(hash(primary_stream.group or "Uncategorized") % 10000),
+                "category_name": primary_stream.group or "Uncategorized"
+            })
+    
+    return series
+
+
+async def get_live_categories(restreamer):
+    """Get all live stream categories"""
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    categories = {}
+    
+    for name, stream_list in grouped_streams.items():
+        primary_stream = stream_list[0]
+        
+        # Only count live streams
+        if "(Series)" not in name and not any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']):
+            category = primary_stream.group or "Uncategorized"
+            if category not in categories:
+                categories[category] = {
+                    "category_id": str(hash(category) % 10000),
+                    "category_name": category,
+                    "parent_id": 0
+                }
+    
+    return list(categories.values())
+
+
+async def get_vod_categories(restreamer):
+    """Get all VOD categories"""
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    categories = {}
+    
+    for name, stream_list in grouped_streams.items():
+        primary_stream = stream_list[0]
+        
+        # Only count VOD streams
+        if any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']) and "(Series)" not in name:
+            category = primary_stream.group or "Uncategorized"
+            if category not in categories:
+                categories[category] = {
+                    "category_id": str(hash(category) % 10000),
+                    "category_name": category,
+                    "parent_id": 0
+                }
+    
+    return list(categories.values())
+
+
+async def get_series_categories(restreamer):
+    """Get all series categories"""
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    categories = {}
+    
+    for name, stream_list in grouped_streams.items():
+        primary_stream = stream_list[0]
+        
+        # Only count series
+        if "(Series)" in name:
+            category = primary_stream.group or "Uncategorized"
+            if category not in categories:
+                categories[category] = {
+                    "category_id": str(hash(category) % 10000),
+                    "category_name": category,
+                    "parent_id": 0
+                }
+    
+    return list(categories.values())
+
+
+def get_user_info(restreamer):
+    """Get user info"""
+    return {
+        "user_info": {
+            "username": restreamer.config.xtream_auth.username,
+            "password": restreamer.config.xtream_auth.password,
+            "message": "Welcome to KPTV Restreamer",
+            "auth": 1,
+            "status": "Active",
+            "exp_date": "9999999999",
+            "is_trial": "0",
+            "active_cons": "0",
+            "created_at": "0",
+            "max_connections": str(restreamer.config.max_total_connections),
+            "allowed_output_formats": ["ts", "m3u8", "mp4"]
+        },
+        "server_info": {
+            "url": restreamer.config.public_url,
+            "port": str(restreamer.config.bind_port),
+            "https_port": "",
+            "server_protocol": "http",
+            "rtmp_port": "",
+            "timezone": "UTC",
+            "timestamp_now": 0,
+            "time_now": ""
+        }
+    }
+
+
+@router.get("/live/{username}/{password}/{stream_id}.{ext}")
+async def stream_live(
+    username: str,
+    password: str,
+    stream_id: str,
+    ext: str,
+    request: Request
+):
+    """Stream live content via Xtream format URL"""
+    restreamer = get_restreamer(request)
+    if not restreamer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    if not check_auth(restreamer, username, password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    return await restreamer.stream_content(stream_id)
+
+
+@router.get("/movie/{username}/{password}/{stream_id}.{ext}")
+async def stream_movie(
+    username: str,
+    password: str,
+    stream_id: str,
+    ext: str,
+    request: Request
+):
+    """Stream VOD content via Xtream format URL"""
+    restreamer = get_restreamer(request)
+    if not restreamer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    if not check_auth(restreamer, username, password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    return await restreamer.stream_content(stream_id)
+
+
+@router.get("/series/{username}/{password}/{stream_id}.{ext}")
+async def stream_series(
+    username: str,
+    password: str,
+    stream_id: str,
+    ext: str,
+    request: Request
+):
+    """Stream series content via Xtream format URL"""
+    restreamer = get_restreamer(request)
+    if not restreamer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    if not check_auth(restreamer, username, password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    return await restreamer.stream_content(stream_id)
