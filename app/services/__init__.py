@@ -3,6 +3,7 @@ from .stream_cache import StreamCache, StreamBuffer, CachedStream
 from .stream_mapper import StreamNameMapper
 from .stream_filter import StreamFilter
 from .stream_aggregator import StreamAggregator
+from .stream_service import StreamService
 
 __all__ = [
     "ConnectionManager",
@@ -12,4 +13,5 @@ __all__ = [
     "StreamNameMapper",
     "StreamFilter",
     "StreamAggregator",
+    "StreamService",
 ]
