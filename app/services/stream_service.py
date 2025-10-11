@@ -83,6 +83,9 @@ class StreamService:
 
             # set and hold the primary stream
             primary_stream = streams[0]
+
+            # apply prefix and suffix
+            display_name = f"{self.config.stream_name_prefix}{name}{self.config.stream_name_suffix}"
             
             # start up the ext-inf string line
             extinf = f'#EXTINF:-1'
@@ -108,7 +111,7 @@ class StreamService:
                 extinf += f' audio-track="{primary_stream.audio_track}"'
             
             # now we need to append the name
-            extinf += f', {name}'
+            extinf += f', {display_name}'
             
             # append it to our list
             lines.append(extinf)

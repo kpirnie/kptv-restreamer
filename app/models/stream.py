@@ -99,3 +99,6 @@ class AppConfig:
     public_url: str = "http://localhost:8080"
     log_level: str = "INFO"
     xtream_auth: XtreamAuthConfig = field(default_factory=XtreamAuthConfig)
+    stream_name_prefix: str = ""
+    stream_name_suffix: str = ""
+    
