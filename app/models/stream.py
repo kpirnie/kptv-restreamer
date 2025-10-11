@@ -1,7 +1,24 @@
+#!/usr/bin/env python3
+"""
+Stream Data Models Module
+
+This module defines all data models and configuration classes for the KPTV Restreamer.
+It includes models for streams, sources, filters, and application configuration.
+
+@package KPTV Restreamer
+@author Kevin Pirnie <me@kpirnie.com>
+@copyright Copyright (c) 2025
+"""
+
+# add our imports
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+"""
+Information about a single stream
 
+Contains metadata and URL information for an individual stream from a source.
+"""
 @dataclass
 class StreamInfo:
     """Information about a single stream"""
@@ -12,8 +29,22 @@ class StreamInfo:
     group: str = ""
     logo: str = ""
     stream_id: Optional[str] = None
+    tvg_id: str = ""
+    tvg_name: str = ""
+    tvg_language: str = ""
+    tvg_country: str = ""
+    tvg_url: str = ""
+    radio: str = ""
+    aspect_ratio: str = ""
+    audio_track: str = ""
+    epg_channel_id: str = ""
+    parent_code: str = ""
 
+"""
+Configuration for a stream source
 
+Defines connection parameters and behavior for a single stream source provider.
+"""
 @dataclass
 class SourceConfig:
     """Configuration for a stream source"""
@@ -27,7 +58,11 @@ class SourceConfig:
     enabled: bool = True
     exp_date: Optional[str] = None
 
+"""
+Configuration for stream filtering
 
+Defines regex patterns for including or excluding streams based on names and URLs.
+"""
 @dataclass
 class FilterConfig:
     """Configuration for stream filtering"""
@@ -36,7 +71,11 @@ class FilterConfig:
     exclude_name_patterns: List[str] = field(default_factory=list)
     exclude_stream_patterns: List[str] = field(default_factory=list)
 
+"""
+Xtream API authentication configuration
 
+Contains credentials and settings for Xtream Codes API compatibility.
+"""
 @dataclass
 class XtreamAuthConfig:
     """Xtream API authentication configuration"""
@@ -44,7 +83,11 @@ class XtreamAuthConfig:
     username: str = "admin"
     password: str = "admin"
 
+"""
+Main application configuration
 
+Top-level configuration containing all sources, filters, and global settings.
+"""
 @dataclass
 class AppConfig:
     """Main application configuration"""

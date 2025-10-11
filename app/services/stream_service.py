@@ -1,5 +1,17 @@
-import logging
-import asyncio
+#!/usr/bin/env python3
+"""
+Stream Service Module
+
+This module handles stream processing and delivery to clients.
+It manages playlist generation, stream resolution, failover logic, and content streaming.
+
+@package KPTV Restreamer
+@author Kevin Pirnie <me@kpirnie.com>
+@copyright Copyright (c) 2025
+"""
+
+# setup the imports
+import logging, asyncio
 from typing import Optional
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -13,12 +25,27 @@ from app.services import (
     StreamAggregator
 )
 
+# setup the logger
 logger = logging.getLogger(__name__)
 
+"""
+Handles stream processing and delivery
 
+Manages stream resolution, failover, caching, and delivery to clients.
+"""
 class StreamService:
-    """Handles stream processing and delivery"""
     
+    """
+    Initialize the StreamService
+    Sets up all service dependencies for stream processing and delivery.
+
+    @param config: AppConfig Application configuration
+    @param session: aiohttp.ClientSession HTTP session
+    @param connection_manager: ConnectionManager Connection limit manager
+    @param stream_cache: StreamCache Stream caching manager
+    @param name_mapper: StreamNameMapper Stream ID mapper
+    @param aggregator: StreamAggregator Stream aggregator
+    """
     def __init__(
         self,
         config: AppConfig,
@@ -28,6 +55,8 @@ class StreamService:
         name_mapper: StreamNameMapper,
         aggregator: StreamAggregator
     ):
+        
+        # setup the internals
         self.config = config
         self.session = session
         self.connection_manager = connection_manager
@@ -35,30 +64,73 @@ class StreamService:
         self.name_mapper = name_mapper
         self.aggregator = aggregator
     
+    """
+    Generate M3U8 playlist of all grouped streams
+    Creates unified M3U8 playlist with all available streams and metadata.
+
+    @return str: M3U8 playlist content
+    """
     async def get_m3u8_playlist(self) -> str:
-        """Generate M3U8 playlist of all grouped streams"""
+        
+        # get the grouped streams
         grouped_streams = self.aggregator.get_grouped_streams()
         
+        # set the first line that we need to output
         lines = ['#EXTM3U']
         
+        # loop over each stream in the groups
         for name, streams in grouped_streams.items():
+
+            # set and hold the primary stream
             primary_stream = streams[0]
             
+            # start up the ext-inf string line
             extinf = f'#EXTINF:-1'
+            if primary_stream.tvg_id:
+                extinf += f' tvg-id="{primary_stream.tvg_id}"'
+            if primary_stream.tvg_name:
+                extinf += f' tvg-name="{primary_stream.tvg_name}"'
+            if primary_stream.tvg_language:
+                extinf += f' tvg-language="{primary_stream.tvg_language}"'
+            if primary_stream.tvg_country:
+                extinf += f' tvg-country="{primary_stream.tvg_country}"'
+            if primary_stream.tvg_url:
+                extinf += f' tvg-url="{primary_stream.tvg_url}"'
             if primary_stream.group:
                 extinf += f' group-title="{primary_stream.group}"'
             if primary_stream.logo:
                 extinf += f' tvg-logo="{primary_stream.logo}"'
-            extinf += f',{name}'
+            if primary_stream.radio:
+                extinf += f' radio="{primary_stream.radio}"'
+            if primary_stream.aspect_ratio:
+                extinf += f' aspect-ratio="{primary_stream.aspect_ratio}"'
+            if primary_stream.audio_track:
+                extinf += f' audio-track="{primary_stream.audio_track}"'
             
+            # now we need to append the name
+            extinf += f', {name}'
+            
+            # append it to our list
             lines.append(extinf)
             
+            # grab our stream id and the full url
             stream_id = await self.name_mapper.get_stream_id(name)
             full_url = f"{self.config.public_url.rstrip('/')}/stream/{stream_id}"
+            
+            # append the streams url line
             lines.append(full_url)
         
+        # return all lines
         return '\n'.join(lines)
     
+    """
+    Resolve stream ID to stream name
+    Looks up stream name from ID, falling back to full search if needed.
+
+    @param stream_id: str Stream identifier to resolve
+    @return str: Resolved stream name
+    @throws HTTPException: 404 if stream ID not found
+    """
     async def resolve_stream_name(self, stream_id: str) -> str:
         """Resolve stream ID to stream name"""
         stream_name = await self.name_mapper.get_stream_name(stream_id)
@@ -75,6 +147,14 @@ class StreamService:
         
         return stream_name
     
+    """
+    Get target streams for a given stream name
+    Retrieves all source streams for the specified stream name.
+
+    @param stream_name: str Name of stream to retrieve
+    @return tuple: (target_streams, resolved_stream_name)
+    @throws HTTPException: 404 if stream not found
+    """
     def get_target_streams(self, stream_name: str):
         """Get target streams for a given stream name"""
         grouped_streams = self.aggregator.get_grouped_streams()
@@ -93,6 +173,13 @@ class StreamService:
         
         return target_streams, stream_name
     
+    """
+    Sort streams by source availability
+    Orders streams prioritizing sources with most available connections.
+
+    @param streams: list List of StreamInfo objects to sort
+    @return list: Sorted list of streams
+    """
     def sort_streams_by_availability(self, streams):
         """Sort streams by source availability"""
         def get_source_availability(stream):
@@ -104,6 +191,14 @@ class StreamService:
         indexed_streams.sort(key=lambda x: (-get_source_availability(x[1]), x[0]))
         return [stream for _, stream in indexed_streams]
     
+    """
+    Stream content using cache
+    Resolves stream, handles failover, and delivers cached stream to client.
+
+    @param stream_id: str Stream identifier to stream
+    @return StreamingResponse: Streaming response with content
+    @throws HTTPException: 503 if all sources fail, 404 if stream not found
+    """
     async def stream_content(self, stream_id: str):
         """Stream content using cache"""
         stream_name = await self.resolve_stream_name(stream_id)
@@ -176,6 +271,13 @@ class StreamService:
         logger.error(error_msg)
         raise HTTPException(status_code=503, detail=error_msg)
     
+    """
+    Determine media type from URL
+    Examines URL extension to determine appropriate MIME type.
+
+    @param url: str Stream URL to analyze
+    @return str: MIME type for the stream
+    """
     def _get_media_type(self, url: str) -> str:
         """Determine media type from URL"""
         url_lower = url.lower()
