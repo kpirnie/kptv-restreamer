@@ -111,12 +111,15 @@ async def get_live_streams(restreamer):
     for name, stream_list in grouped_streams.items():
         primary_stream = stream_list[0]
         stream_id = await restreamer.name_mapper.get_stream_id(name)
+
+        # Apply prefix and suffix to name
+        display_name = f"{restreamer.config.stream_name_prefix}{name}{restreamer.config.stream_name_suffix}"
         
         # Only include non-VOD, non-series streams
         if "(Series)" not in name and not any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']):
             streams.append({
                 "num": len(streams) + 1,
-                "name": name,
+                "name": display_name,
                 "stream_type": "live",
                 "stream_id": stream_id,
                 "stream_icon": primary_stream.logo or "",
@@ -151,12 +154,15 @@ async def get_vod_streams(restreamer):
     for name, stream_list in grouped_streams.items():
         primary_stream = stream_list[0]
         stream_id = await restreamer.name_mapper.get_stream_id(name)
+
+        # Apply prefix and suffix to name
+        display_name = f"{restreamer.config.stream_name_prefix}{name}{restreamer.config.stream_name_suffix}"
         
         # Only include VOD streams (mp4, mkv, etc)
         if any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']) and "(Series)" not in name:
             streams.append({
                 "num": len(streams) + 1,
-                "name": name,
+                "name": display_name,
                 "stream_type": "movie",
                 "stream_id": stream_id,
                 "stream_icon": primary_stream.logo or "",
@@ -192,9 +198,12 @@ async def get_series(restreamer):
         # Only include series
         if "(Series)" in name:
             clean_name = name.replace(" (Series)", "")
+             # Apply prefix and suffix to name
+            display_name = f"{restreamer.config.stream_name_prefix}{clean_name}{restreamer.config.stream_name_suffix}"
+            
             series.append({
                 "num": len(series) + 1,
-                "name": clean_name,
+                "name": display_name,
                 "series_id": stream_id,
                 "cover": primary_stream.logo or "",
                 "plot": "",
