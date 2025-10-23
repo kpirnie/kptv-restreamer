@@ -76,7 +76,7 @@ class StreamService:
         grouped_streams = self.aggregator.get_grouped_streams()
         
         # set the first line that we need to output
-        lines = ['#EXTM3U']
+        lines = [f'#EXTM3U url-tvg="{self.config.public_url.rstrip("/")}/epg.xml"']
         
         # loop over each stream in the groups
         for name, streams in grouped_streams.items():

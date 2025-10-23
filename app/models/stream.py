@@ -57,6 +57,7 @@ class SourceConfig:
     refresh_interval: int = 300  # seconds
     enabled: bool = True
     exp_date: Optional[str] = None
+    epg_url: Optional[str] = None
 
 """
 Configuration for stream filtering

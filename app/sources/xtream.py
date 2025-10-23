@@ -94,6 +94,9 @@ class XtreamSource(StreamSource):
         except Exception as e:
             logger.error(f"Failed to fetch user info: {e}")
             self.config.exp_date = '9999999999'
+
+        # Build EPG URL
+        self.config.epg_url = f"{self.config.url}/xmltv.php?username={self.config.username}&password={self.config.password}"
     
     """
     Fetch live streams from Xtream API

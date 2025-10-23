@@ -124,6 +124,7 @@ All filter patterns use Python regex syntax:
 ### Core Endpoints
 
 - `GET /playlist.m3u8` - Get unified M3U8 playlist of all streams
+- `GET /epg.xml` - Get unified XMLTV EPG from all sources
 - `GET /stream/{stream_hash}` - Stream a specific channel with failover
 - `GET /status` - Get service status and connection information
 

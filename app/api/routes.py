@@ -13,7 +13,7 @@ It includes endpoints for streaming, status monitoring, cache management, and de
 # imports
 import logging
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 
 # setup the logger
 logger = logging.getLogger(__name__)
@@ -319,3 +319,13 @@ async def debug_grouped_streams(request: Request):
         }
     
     return result
+
+@router.get("/epg.xml")
+async def get_epg(request: Request):
+    """Get aggregated EPG data"""
+    restreamer = get_restreamer(request)
+    if not restreamer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    epg_data = await restreamer.get_epg_data()
+    return Response(content=epg_data, media_type="application/xml")
