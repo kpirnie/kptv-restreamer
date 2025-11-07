@@ -52,7 +52,9 @@ def load_config(config_path: str) -> AppConfig:
             max_connections=source_data.get('max_connections', 5),
             refresh_interval=source_data.get('refresh_interval', 300),
             enabled=source_data.get('enabled', True),
-            exp_date=None 
+            exp_date=None,
+            stream_name_prefix=source_data.get('stream_name_prefix', ''),
+            stream_name_suffix=source_data.get('stream_name_suffix', '')
         ))
     
     # setup and hold the filters
@@ -81,7 +83,5 @@ def load_config(config_path: str) -> AppConfig:
         bind_port=config_data.get('bind_port', 8080),
         public_url=config_data.get('public_url', 'http://localhost:8080'),
         log_level=config_data.get('log_level', 'INFO'),
-        xtream_auth=xtream_auth,
-        stream_name_prefix=config_data.get('stream_name_prefix', ''),
-        stream_name_suffix=config_data.get('stream_name_suffix', '')
+        xtream_auth=xtream_auth
     )

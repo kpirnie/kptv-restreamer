@@ -84,8 +84,8 @@ class StreamService:
             # set and hold the primary stream
             primary_stream = streams[0]
 
-            # apply prefix and suffix
-            display_name = f"{self.config.stream_name_prefix}{name}{self.config.stream_name_suffix}"
+            # Use the display_name from the stream (already has prefix/suffix applied)
+            display_name = primary_stream.display_name or name
             
             # start up the ext-inf string line
             extinf = f'#EXTINF:-1'

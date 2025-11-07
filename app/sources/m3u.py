@@ -65,7 +65,7 @@ class M3USource(StreamSource):
     @return list: List of StreamInfo objects with parsed metadata
     """
     def _parse_m3u(self, content: str) -> List[StreamInfo]:
-        
+    
         # hold the streams and the lines
         streams = []
         lines = content.strip().split('\n')
@@ -137,9 +137,13 @@ class M3USource(StreamSource):
                 # make sure there's a name for the stream
                 if 'name' in current_info:
 
+                    # Get the base name and apply prefix/suffix
+                    base_name = current_info.get('name', 'Unknown')
+                    display_name = f"{self.config.stream_name_prefix}{base_name}{self.config.stream_name_suffix}"
+
                     # append it to the stream info
                     streams.append(StreamInfo(
-                        name=current_info.get('name', 'Unknown'),
+                        name=base_name,
                         url=line,
                         source_id=self.config.name,
                         group=current_info.get('group', ''),
@@ -151,7 +155,8 @@ class M3USource(StreamSource):
                         tvg_url=current_info.get('tvg_url', ''),
                         radio=current_info.get('radio', ''),
                         aspect_ratio=current_info.get('aspect_ratio', ''),
-                        audio_track=current_info.get('audio_track', '')
+                        audio_track=current_info.get('audio_track', ''),
+                        display_name=display_name
                     ))
 
                 # clear the current info for the next stream

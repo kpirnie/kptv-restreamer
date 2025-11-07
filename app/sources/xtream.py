@@ -132,9 +132,13 @@ class XtreamSource(StreamSource):
                         # format the stream url
                         stream_url = f"{self.config.url}/live/{self.config.username}/{self.config.password}/{stream.get('stream_id', '')}.ts"
                         
+                        # Get the base name and apply prefix/suffix
+                        base_name = stream.get('name', '')
+                        display_name = f"{self.config.stream_name_prefix}{base_name}{self.config.stream_name_suffix}"
+
                         # append it all to the stream info
                         streams.append(StreamInfo(
-                            name=stream.get('name', ''),
+                            name=base_name,
                             url=stream_url,
                             source_id=self.config.name,
                             category=stream.get('category_name', ''),
@@ -142,9 +146,10 @@ class XtreamSource(StreamSource):
                             logo=stream.get('stream_icon', ''),
                             stream_id=str(stream.get('stream_id', '')),
                             tvg_id=stream.get('epg_channel_id', ''),
-                            tvg_name=stream.get('name', ''),
+                            tvg_name=base_name,
                             epg_channel_id=stream.get('epg_channel_id', ''),
-                            parent_code=str(stream.get('parent_code', ''))
+                            parent_code=str(stream.get('parent_code', '')),
+                            display_name=display_name
                         ))
 
         # whoopsie.. log the error
@@ -153,7 +158,7 @@ class XtreamSource(StreamSource):
         
         # return the streams
         return streams
-    
+
     """
     Fetch VOD (Video on Demand) streams from Xtream API
     Retrieves all available movies and video content from the provider.
@@ -187,16 +192,21 @@ class XtreamSource(StreamSource):
                         # setup the stream URL
                         stream_url = f"{self.config.url}/movie/{self.config.username}/{self.config.password}/{stream.get('stream_id', '')}.mp4"
                         
+                        # Get the base name and apply prefix/suffix
+                        base_name = stream.get('name', '')
+                        display_name = f"{self.config.stream_name_prefix}{base_name}{self.config.stream_name_suffix}"
+
                         # append the stream data
                         streams.append(StreamInfo(
-                            name=stream.get('name', ''),
+                            name=base_name,
                             url=stream_url,
                             source_id=self.config.name,
                             category=stream.get('category_name', ''),
                             group=stream.get('category_name', ''),
                             logo=stream.get('stream_icon', ''),
                             stream_id=str(stream.get('stream_id', '')),
-                            tvg_name=stream.get('name', '')
+                            tvg_name=base_name,
+                            display_name=display_name
                         ))
 
         # whoopsie.. log the error
@@ -205,6 +215,7 @@ class XtreamSource(StreamSource):
         
         # return the streams
         return streams
+
     
     """
     Fetch series from Xtream API
@@ -214,7 +225,7 @@ class XtreamSource(StreamSource):
     @return list: List of StreamInfo objects for series content
     """
     async def _fetch_series(self) -> List[StreamInfo]:
-        
+    
         # hold the streams
         streams = []
         
@@ -241,16 +252,21 @@ class XtreamSource(StreamSource):
                         series_id = series.get('series_id', '')
                         series_name = series.get('name', '')
                         
+                        # Get the base name and apply prefix/suffix
+                        base_name = f"{series_name} (Series)"
+                        display_name = f"{self.config.stream_name_prefix}{series_name}{self.config.stream_name_suffix} (Series)"
+
                         # append to our stream info
                         streams.append(StreamInfo(
-                            name=f"{series_name} (Series)",
+                            name=base_name,
                             url=f"{self.config.url}/series/{self.config.username}/{self.config.password}/{series_id}.ts",
                             source_id=self.config.name,
                             category=series.get('category_name', ''),
                             group=series.get('category_name', ''),
                             logo=series.get('cover', ''),
                             stream_id=str(series_id),
-                            tvg_name=series_name
+                            tvg_name=series_name,
+                            display_name=display_name
                         ))
 
         # whoopsie.. log the error

@@ -39,6 +39,7 @@ class StreamInfo:
     audio_track: str = ""
     epg_channel_id: str = ""
     parent_code: str = ""
+    display_name: str = ""
 
 """
 Configuration for a stream source
@@ -58,6 +59,8 @@ class SourceConfig:
     enabled: bool = True
     exp_date: Optional[str] = None
     epg_url: Optional[str] = None
+    stream_name_prefix: str = ""
+    stream_name_suffix: str = ""
 
 """
 Configuration for stream filtering
@@ -100,6 +103,4 @@ class AppConfig:
     public_url: str = "http://localhost:8080"
     log_level: str = "INFO"
     xtream_auth: XtreamAuthConfig = field(default_factory=XtreamAuthConfig)
-    stream_name_prefix: str = ""
-    stream_name_suffix: str = ""
     
