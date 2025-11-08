@@ -203,7 +203,7 @@ class StreamService:
     @throws HTTPException: 503 if all sources fail, 404 if stream not found
     """
     async def stream_content(self, stream_id: str):
-        """Stream content using cache"""
+        """Stream content using cache with active failover"""
         stream_name = await self.resolve_stream_name(stream_id)
         target_streams, stream_name = self.get_target_streams(stream_name)
         
@@ -212,6 +212,9 @@ class StreamService:
         target_streams = self.sort_streams_by_availability(target_streams)
         
         last_error = None
+        current_stream_idx = 0
+        
+        # Try to get or create cached stream
         for stream_idx, stream in enumerate(target_streams):
             source_id = stream.source_id
             
@@ -231,17 +234,72 @@ class StreamService:
                     raise Exception(cached_stream.connection_error)
                 
                 consumer_id = cached_stream.get_next_consumer_id()
+                current_stream_idx = stream_idx
                 
                 logger.info(f"Serving stream '{stream_name}' from cache (consumer {consumer_id})")
                 
-                async def generate_from_cache():
+                async def generate_with_failover():
+                    """Generator that handles failover during streaming"""
+                    nonlocal current_stream_idx
+                    
                     try:
                         start_pos = cached_stream.buffer.buffer_position
+                        chunk_count = 0
+                        error_count = 0
+                        max_errors = 3
                         
                         async for chunk in cached_stream.buffer.consume_from(
                             consumer_id, start_pos
                         ):
                             yield chunk
+                            chunk_count += 1
+                            error_count = 0  # Reset error count on successful chunk
+                            
+                            # Check for stream errors periodically
+                            if chunk_count % 100 == 0 and cached_stream.connection_error:
+                                error_count += 1
+                                logger.warning(
+                                    f"Stream error detected for '{stream_name}': {cached_stream.connection_error} "
+                                    f"(error {error_count}/{max_errors})"
+                                )
+                                
+                                if error_count >= max_errors:
+                                    # Attempt failover to next source
+                                    logger.error(f"Max errors reached, attempting failover for '{stream_name}'")
+                                    
+                                    # Find next available source
+                                    for next_idx in range(current_stream_idx + 1, len(target_streams)):
+                                        next_stream = target_streams[next_idx]
+                                        next_source_id = next_stream.source_id
+                                        
+                                        if not self.connection_manager.can_acquire_connection(next_source_id):
+                                            continue
+                                        
+                                        logger.info(
+                                            f"Failing over '{stream_name}' from {cached_stream.source_id} "
+                                            f"to {next_source_id}"
+                                        )
+                                        
+                                        # Attempt reconnection
+                                        success = await cached_stream.attempt_reconnect(
+                                            self.stream_cache,  # Pass the cache instance instead
+                                            next_stream.url,
+                                            next_source_id
+                                        )
+                                        
+                                        if success:
+                                            current_stream_idx = next_idx
+                                            error_count = 0
+                                            logger.info(f"Failover successful for '{stream_name}'")
+                                            break
+                                        else:
+                                            logger.warning(
+                                                f"Failover to {next_source_id} failed for '{stream_name}'"
+                                            )
+                                    else:
+                                        # No more sources available
+                                        logger.error(f"No more sources available for '{stream_name}'")
+                                        raise Exception("All failover sources exhausted")
                             
                     except asyncio.CancelledError:
                         logger.info(f"Consumer {consumer_id} cancelled for '{stream_name}'")
@@ -253,7 +311,7 @@ class StreamService:
                 media_type = self._get_media_type(stream.url)
                 
                 return StreamingResponse(
-                    generate_from_cache(),
+                    generate_with_failover(),
                     media_type=media_type,
                     headers={
                         "Cache-Control": "no-cache, no-store, must-revalidate",

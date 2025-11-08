@@ -255,6 +255,50 @@ class CachedStream:
         # return if we've hit the timeout
         return (time.time() - self.last_access) > timeout
 
+    """
+    Attempt to reconnect to a different source
+    
+    @param session: aiohttp.ClientSession HTTP session
+    @param connection_manager: ConnectionManager Connection manager instance
+    @param new_stream_url: str New stream URL to connect to
+    @param new_source_id: str New source identifier
+    @return bool: True if reconnection successful
+    """
+    async def attempt_reconnect(self, stream_cache_instance, new_stream_url: str, new_source_id: str):
+        
+        logger.info(f"Attempting reconnect for '{self.stream_name}' from {self.source_id} to {new_source_id}")
+        
+        # Cancel existing source task
+        if self.source_task and not self.source_task.done():
+            self.source_task.cancel()
+            try:
+                await self.source_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Release old connection
+        await stream_cache_instance.connection_manager.release_connection(self.source_id)
+        
+        # Update to new source
+        self.stream_url = new_stream_url
+        self.source_id = new_source_id
+        self.connection_error = None
+        self.is_active = True
+        
+        # Acquire new connection
+        connection_acquired = await stream_cache_instance.connection_manager.acquire_connection(new_source_id)
+        if not connection_acquired:
+            self.connection_error = f"Failed to acquire connection for {new_source_id}"
+            self.is_active = False
+            return False
+        
+        # Start new source task
+        self.source_task = asyncio.create_task(
+            stream_cache_instance._stream_from_source(self)
+        )
+        
+        return True
+
 """
 Manages cached streams to ensure 1 connection per stream to providers
 

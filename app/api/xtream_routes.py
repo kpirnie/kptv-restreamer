@@ -113,8 +113,8 @@ async def get_live_streams(restreamer):
         stream_id = await restreamer.name_mapper.get_stream_id(name)
 
         # Use the display_name from the stream (already has prefix/suffix applied)
-        display_name = primary_stream.display_name or name
-        
+        display_name = primary_stream.display_name if primary_stream.display_name else name
+
         # Only include non-VOD, non-series streams
         if "(Series)" not in name and not any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']):
             streams.append({
@@ -156,7 +156,7 @@ async def get_vod_streams(restreamer):
         stream_id = await restreamer.name_mapper.get_stream_id(name)
 
         # Use the display_name from the stream (already has prefix/suffix applied)
-        display_name = primary_stream.display_name or name
+        display_name = primary_stream.display_name if primary_stream.display_name else name
         
         # Only include VOD streams (mp4, mkv, etc)
         if any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']) and "(Series)" not in name:
@@ -199,8 +199,11 @@ async def get_series(restreamer):
         if "(Series)" in name:
             # Use the display_name from the stream (already has prefix/suffix applied)
             # Remove the " (Series)" suffix that was added during fetch
-            display_name = primary_stream.display_name or name.replace(" (Series)", "")
-            
+            if primary_stream.display_name:
+                display_name = primary_stream.display_name.replace(" (Series)", "")
+            else:
+                display_name = name.replace(" (Series)", "")
+                
             series.append({
                 "num": len(series) + 1,
                 "name": display_name,
