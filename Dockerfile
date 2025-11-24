@@ -1,18 +1,27 @@
-FROM python:3.12-alpine AS builder
+FROM docker.io/library/python:3.12-alpine AS builder
 
 WORKDIR /app
 
-RUN apk add --no-cache gcc musl-dev
+# Fix DNS and use multiple mirrors with proper permissions
+RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && \
+    echo "nameserver 1.1.1.1" >> /etc/resolv.conf && \
+    apk add --no-cache gcc musl-dev || \
+    (sleep 2 && apk add --no-cache gcc musl-dev) || \
+    (sleep 5 && apk add --no-cache gcc musl-dev)
 
 COPY requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-FROM python:3.12-alpine
+FROM docker.io/library/python:3.12-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache curl && \
+RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && \
+    echo "nameserver 1.1.1.1" >> /etc/resolv.conf && \
+    apk add --no-cache curl || \
+    (sleep 2 && apk add --no-cache curl) || \
+    (sleep 5 && apk add --no-cache curl) && \
     adduser -D -s /bin/false appuser
 
 COPY --from=builder /root/.local /home/appuser/.local

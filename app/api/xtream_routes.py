@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Xtream Codes API Routes Module
+Xtream Codes API Routes Module - FIXED VERSION
 
 This module provides Xtream Codes API compatibility endpoints for the KPTV Restreamer.
 It implements the standard Xtream Codes API interface for IPTV player compatibility.
@@ -99,6 +99,7 @@ async def player_api(
 Get all live streams in Xtream format
 
 Returns live streams formatted for Xtream Codes API compatibility.
+FIXED: Now uses original Xtream stream_id from the source
 
 @param restreamer: StreamRestreamer Restreamer instance
 @return list: Formatted live streams data
@@ -110,7 +111,13 @@ async def get_live_streams(restreamer):
     
     for name, stream_list in grouped_streams.items():
         primary_stream = stream_list[0]
-        stream_id = await restreamer.name_mapper.get_stream_id(name)
+        
+        # Use the original Xtream stream_id if available, otherwise generate one
+        if primary_stream.stream_id:
+            xtream_stream_id = primary_stream.stream_id
+        else:
+            # For non-Xtream sources, use the internal mapped ID
+            xtream_stream_id = await restreamer.name_mapper.get_stream_id(name)
 
         # Use the display_name from the stream (already has prefix/suffix applied)
         display_name = primary_stream.display_name if primary_stream.display_name else name
@@ -121,9 +128,9 @@ async def get_live_streams(restreamer):
                 "num": len(streams) + 1,
                 "name": display_name,
                 "stream_type": "live",
-                "stream_id": stream_id,
+                "stream_id": xtream_stream_id,  # Use the original Xtream ID
                 "stream_icon": primary_stream.logo or "",
-                "epg_channel_id": "",
+                "epg_channel_id": primary_stream.epg_channel_id or "",
                 "added": "0",
                 "category_name": primary_stream.group or "Uncategorized",
                 "category_id": str(hash(primary_stream.group or "Uncategorized") % 10000),
@@ -142,6 +149,7 @@ async def get_live_streams(restreamer):
 Get all VOD streams in Xtream format
 
 Returns video-on-demand streams formatted for Xtream Codes API.
+FIXED: Now uses original Xtream stream_id from the source
 
 @param restreamer: StreamRestreamer Restreamer instance
 @return list: Formatted VOD streams data
@@ -153,7 +161,12 @@ async def get_vod_streams(restreamer):
     
     for name, stream_list in grouped_streams.items():
         primary_stream = stream_list[0]
-        stream_id = await restreamer.name_mapper.get_stream_id(name)
+        
+        # Use the original Xtream stream_id if available
+        if primary_stream.stream_id:
+            xtream_stream_id = primary_stream.stream_id
+        else:
+            xtream_stream_id = await restreamer.name_mapper.get_stream_id(name)
 
         # Use the display_name from the stream (already has prefix/suffix applied)
         display_name = primary_stream.display_name if primary_stream.display_name else name
@@ -164,7 +177,7 @@ async def get_vod_streams(restreamer):
                 "num": len(streams) + 1,
                 "name": display_name,
                 "stream_type": "movie",
-                "stream_id": stream_id,
+                "stream_id": xtream_stream_id,  # Use the original Xtream ID
                 "stream_icon": primary_stream.logo or "",
                 "rating": "0",
                 "rating_5based": 0,
@@ -182,6 +195,7 @@ async def get_vod_streams(restreamer):
 Get all series in Xtream format
 
 Returns series content formatted for Xtream Codes API.
+FIXED: Now uses original Xtream stream_id from the source
 
 @param restreamer: StreamRestreamer Restreamer instance
 @return list: Formatted series data
@@ -193,10 +207,15 @@ async def get_series(restreamer):
     
     for name, stream_list in grouped_streams.items():
         primary_stream = stream_list[0]
-        stream_id = await restreamer.name_mapper.get_stream_id(name)
         
         # Only include series
         if "(Series)" in name:
+            # Use the original Xtream stream_id if available
+            if primary_stream.stream_id:
+                xtream_stream_id = primary_stream.stream_id
+            else:
+                xtream_stream_id = await restreamer.name_mapper.get_stream_id(name)
+            
             # Use the display_name from the stream (already has prefix/suffix applied)
             # Remove the " (Series)" suffix that was added during fetch
             if primary_stream.display_name:
@@ -207,7 +226,7 @@ async def get_series(restreamer):
             series.append({
                 "num": len(series) + 1,
                 "name": display_name,
-                "series_id": stream_id,
+                "series_id": xtream_stream_id,  # Use the original Xtream ID
                 "cover": primary_stream.logo or "",
                 "plot": "",
                 "cast": "",
@@ -356,11 +375,11 @@ def get_user_info(restreamer):
 """
 Stream live content via Xtream format URL
 
-Xtream-compatible endpoint for streaming live content with authentication.
+FIXED: Now properly resolves Xtream stream IDs
 
 @param username: str Xtream API username
 @param password: str Xtream API password
-@param stream_id: str Stream identifier
+@param stream_id: str Stream identifier (Xtream ID)
 @param ext: str File extension (ts, m3u8, etc)
 @param request: Request FastAPI request object
 @return StreamingResponse: Stream content
@@ -382,16 +401,21 @@ async def stream_live(
     if not check_auth(restreamer, username, password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    return await restreamer.stream_content(stream_id)
+    # Find the stream by original Xtream ID
+    internal_stream_id = await find_internal_stream_id(restreamer, stream_id, "live")
+    if not internal_stream_id:
+        raise HTTPException(status_code=404, detail=f"Stream {stream_id} not found")
+    
+    return await restreamer.stream_content(internal_stream_id)
 
 """
 Stream VOD content via Xtream format URL
 
-Xtream-compatible endpoint for streaming video-on-demand content.
+FIXED: Now properly resolves Xtream stream IDs
 
 @param username: str Xtream API username
 @param password: str Xtream API password
-@param stream_id: str Stream identifier
+@param stream_id: str Stream identifier (Xtream ID)
 @param ext: str File extension
 @param request: Request FastAPI request object
 @return StreamingResponse: Stream content
@@ -413,16 +437,21 @@ async def stream_movie(
     if not check_auth(restreamer, username, password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    return await restreamer.stream_content(stream_id)
+    # Find the stream by original Xtream ID
+    internal_stream_id = await find_internal_stream_id(restreamer, stream_id, "vod")
+    if not internal_stream_id:
+        raise HTTPException(status_code=404, detail=f"Stream {stream_id} not found")
+    
+    return await restreamer.stream_content(internal_stream_id)
 
 """
 Stream series content via Xtream format URL
 
-Xtream-compatible endpoint for streaming series content.
+FIXED: Now properly resolves Xtream stream IDs
 
 @param username: str Xtream API username
 @param password: str Xtream API password
-@param stream_id: str Stream identifier
+@param stream_id: str Stream identifier (Xtream ID)
 @param ext: str File extension
 @param request: Request FastAPI request object
 @return StreamingResponse: Stream content
@@ -444,4 +473,39 @@ async def stream_series(
     if not check_auth(restreamer, username, password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    return await restreamer.stream_content(stream_id)
+    # Find the stream by original Xtream ID
+    internal_stream_id = await find_internal_stream_id(restreamer, stream_id, "series")
+    if not internal_stream_id:
+        raise HTTPException(status_code=404, detail=f"Stream {stream_id} not found")
+    
+    return await restreamer.stream_content(internal_stream_id)
+
+"""
+Find internal stream ID from Xtream stream ID
+
+Helper function to map Xtream stream IDs back to internal IDs
+
+@param restreamer: StreamRestreamer instance
+@param xtream_id: str Original Xtream stream ID
+@param stream_type: str Type of stream (live, vod, series)
+@return str: Internal stream ID or None if not found
+"""
+async def find_internal_stream_id(restreamer, xtream_id: str, stream_type: str) -> Optional[str]:
+    """Map Xtream stream ID to internal stream ID"""
+    grouped_streams = restreamer.aggregator.get_grouped_streams()
+    
+    for name, stream_list in grouped_streams.items():
+        for stream in stream_list:
+            # Check if this stream has the matching Xtream ID
+            if stream.stream_id == xtream_id:
+                # Verify it's the right type
+                if stream_type == "live" and "(Series)" not in name and not any(ext in stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']):
+                    return await restreamer.name_mapper.get_stream_id(name)
+                elif stream_type == "vod" and any(ext in stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']):
+                    return await restreamer.name_mapper.get_stream_id(name)
+                elif stream_type == "series" and "(Series)" in name:
+                    return await restreamer.name_mapper.get_stream_id(name)
+    
+    # If no Xtream ID match found, try treating it as an internal ID (for non-Xtream sources)
+    # This maintains compatibility with M3U sources
+    return xtream_id
