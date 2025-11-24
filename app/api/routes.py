@@ -12,8 +12,9 @@ It includes endpoints for streaming, status monitoring, cache management, and de
 
 # imports
 import logging
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import PlainTextResponse, Response
+from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi.responses import PlainTextResponse, Response, RedirectResponse
+from typing import Optional
 
 # setup the logger
 logger = logging.getLogger(__name__)
@@ -32,15 +33,31 @@ def get_restreamer(request: Request):
     return request.app.state.restreamer
 
 """
-Root endpoint with API information
+Root endpoint with API information or Xtream API redirect
 
-Provides basic API information and available endpoints
+If Xtream parameters are detected, redirect to player_api.php
+Otherwise provide basic API information
 
-@return dict: API information and available endpoints
+@return dict or RedirectResponse: API info or redirect to Xtream endpoint
 """
 @router.get("/")
-async def root():
-    """Root endpoint with API information"""
+async def root(
+    request: Request,
+    username: Optional[str] = Query(None),
+    password: Optional[str] = Query(None),
+    action: Optional[str] = Query(None)
+):
+    """Root endpoint with API information or Xtream redirect"""
+    
+    # Check if this is an Xtream API request
+    if username is not None or password is not None or action is not None:
+        # Build redirect URL with all query parameters
+        query_string = str(request.url).split('?', 1)[1] if '?' in str(request.url) else ''
+        redirect_url = f"/player_api.php?{query_string}"
+        logger.info(f"Redirecting Xtream request from / to {redirect_url}")
+        return RedirectResponse(url=redirect_url)
+    
+    # Otherwise return API info
     return {
         "message": "HLS Stream Restreamer API with Stream Caching",
         "version": "1.0.0",
@@ -50,7 +67,8 @@ async def root():
             "streams": "/streams",
             "stream": "/stream/{stream_id}",
             "active_streams": "/active-streams",
-            "cache_status": "/cache-status"
+            "cache_status": "/cache-status",
+            "xtream_api": "/player_api.php"
         }
     }
 
