@@ -4,6 +4,15 @@ M3U playlist source
 
 Fetches and parses M3U/M3U8 playlists from HTTP URLs.
 """
+# setup the imports
+import re, logging
+from typing import List
+from app.models import StreamInfo
+from app.sources.base import StreamSource
+
+# setup the logger
+logger = logging.getLogger(__name__)
+
 class M3USource(StreamSource):
     
     # pre-compiled regex patterns for M3U parsing
@@ -155,4 +164,3 @@ class M3USource(StreamSource):
         
         # return the streams
         return streams
-        
