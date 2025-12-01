@@ -1,31 +1,23 @@
 #!/usr/bin/env python3
 """
-M3U Playlist Source Module
-
-This module implements M3U/M3U8 playlist parsing and stream extraction.
-It fetches playlists from HTTP URLs and parses EXTINF metadata.
-
-@package KPTV Restreamer
-@author Kevin Pirnie <me@kpirnie.com>
-@copyright Copyright (c) 2025
-"""
-
-# setup the imports
-import re, logging
-from typing import List
-from app.models import StreamInfo
-from app.sources.base import StreamSource
-
-# setup the logger
-logger = logging.getLogger(__name__)
-
-"""
 M3U playlist source
 
 Fetches and parses M3U/M3U8 playlists from HTTP URLs.
 """
 class M3USource(StreamSource):
     
+    # pre-compiled regex patterns for M3U parsing
+    _GROUP_PATTERN = re.compile(r'group-title="([^"]*)"')
+    _LOGO_PATTERN = re.compile(r'tvg-logo="([^"]*)"')
+    _TVG_ID_PATTERN = re.compile(r'tvg-id="([^"]*)"')
+    _TVG_LANGUAGE_PATTERN = re.compile(r'tvg-language="([^"]*)"')
+    _TVG_COUNTRY_PATTERN = re.compile(r'tvg-country="([^"]*)"')
+    _TVG_URL_PATTERN = re.compile(r'tvg-url="([^"]*)"')
+    _RADIO_PATTERN = re.compile(r'radio="([^"]*)"')
+    _ASPECT_RATIO_PATTERN = re.compile(r'aspect-ratio="([^"]*)"')
+    _AUDIO_TRACK_PATTERN = re.compile(r'audio-track="([^"]*)"')
+    _TVG_NAME_PATTERN = re.compile(r'tvg-name="([^"]*)"')
+
     """
     Fetch streams from M3U playlist
     Downloads the M3U playlist and parses it into StreamInfo objects.
@@ -89,47 +81,46 @@ class M3USource(StreamSource):
                 if len(parts) == 2:
                     current_info['name'] = parts[1].strip()
                 
-                # setup the rest of the meta data
-                if 'group-title=' in line:
-                    match = re.search(r'group-title="([^"]*)"', line)
-                    if match:
-                        current_info['group'] = match.group(1)
-                if 'tvg-logo=' in line:
-                    match = re.search(r'tvg-logo="([^"]*)"', line)
-                    if match:
-                        current_info['logo'] = match.group(1)
-                if 'tvg-id=' in line:
-                    match = re.search(r'tvg-id="([^"]*)"', line)
-                    if match:
-                        current_info['tvg_id'] = match.group(1)
-                if 'tvg-language=' in line:
-                    match = re.search(r'tvg-language="([^"]*)"', line)
-                    if match:
-                        current_info['tvg_language'] = match.group(1)
-                if 'tvg-country=' in line:
-                    match = re.search(r'tvg-country="([^"]*)"', line)
-                    if match:
-                        current_info['tvg_country'] = match.group(1)
-                if 'tvg-url=' in line:
-                    match = re.search(r'tvg-url="([^"]*)"', line)
-                    if match:
-                        current_info['tvg_url'] = match.group(1)
-                if 'radio=' in line:
-                    match = re.search(r'radio="([^"]*)"', line)
-                    if match:
-                        current_info['radio'] = match.group(1)
-                if 'aspect-ratio=' in line:
-                    match = re.search(r'aspect-ratio="([^"]*)"', line)
-                    if match:
-                        current_info['aspect_ratio'] = match.group(1)
-                if 'audio-track=' in line:
-                    match = re.search(r'audio-track="([^"]*)"', line)
-                    if match:
-                        current_info['audio_track'] = match.group(1)
-                if 'tvg-name=' in line:
-                    match = re.search(r'tvg-name="([^"]*)"', line)
-                    if match:
-                        current_info['name'] = match.group(1)
+                # setup the rest of the meta data using pre-compiled patterns
+                match = self._GROUP_PATTERN.search(line)
+                if match:
+                    current_info['group'] = match.group(1)
+                
+                match = self._LOGO_PATTERN.search(line)
+                if match:
+                    current_info['logo'] = match.group(1)
+                
+                match = self._TVG_ID_PATTERN.search(line)
+                if match:
+                    current_info['tvg_id'] = match.group(1)
+                
+                match = self._TVG_LANGUAGE_PATTERN.search(line)
+                if match:
+                    current_info['tvg_language'] = match.group(1)
+                
+                match = self._TVG_COUNTRY_PATTERN.search(line)
+                if match:
+                    current_info['tvg_country'] = match.group(1)
+                
+                match = self._TVG_URL_PATTERN.search(line)
+                if match:
+                    current_info['tvg_url'] = match.group(1)
+                
+                match = self._RADIO_PATTERN.search(line)
+                if match:
+                    current_info['radio'] = match.group(1)
+                
+                match = self._ASPECT_RATIO_PATTERN.search(line)
+                if match:
+                    current_info['aspect_ratio'] = match.group(1)
+                
+                match = self._AUDIO_TRACK_PATTERN.search(line)
+                if match:
+                    current_info['audio_track'] = match.group(1)
+                
+                match = self._TVG_NAME_PATTERN.search(line)
+                if match:
+                    current_info['name'] = match.group(1)
             
             # now... this line should be the stream URL
             elif line and not line.startswith('#'):
@@ -164,3 +155,4 @@ class M3USource(StreamSource):
         
         # return the streams
         return streams
+        

@@ -60,7 +60,7 @@ class XtreamSource(StreamSource):
         # Fetch all stream types
         streams.extend(await self._fetch_live_streams())
         streams.extend(await self._fetch_vod_streams())
-        streams.extend(await self._fetch_series())
+        streams.extend(await self._fetch_series_streams())
         
         # return them
         return streams
@@ -97,7 +97,7 @@ class XtreamSource(StreamSource):
 
         # Build EPG URL
         self.config.epg_url = f"{self.config.url}/xmltv.php?username={self.config.username}&password={self.config.password}"
-    
+
     """
     Fetch live streams from Xtream API
     
@@ -126,8 +126,17 @@ class XtreamSource(StreamSource):
                     # we do, so hold the data
                     data = await resp.json()
 
+                    # validate response is a list
+                    if not isinstance(data, list):
+                        logger.warning(f"Unexpected live streams response format from {self.config.name}: {type(data)}")
+                        return []
+
                     # for each stream item in the response
                     for stream in data:
+
+                        # skip if not a dict
+                        if not isinstance(stream, dict):
+                            continue
 
                         # format the stream url
                         stream_url = f"{self.config.url}/live/{self.config.username}/{self.config.password}/{stream.get('stream_id', '')}.ts"
@@ -186,8 +195,17 @@ class XtreamSource(StreamSource):
                     # we do, so hold the data
                     data = await resp.json()
 
+                    # validate response is a list
+                    if not isinstance(data, list):
+                        logger.warning(f"Unexpected VOD streams response format from {self.config.name}: {type(data)}")
+                        return []
+
                     # loop the streams in the response
                     for stream in data:
+
+                        # skip if not a dict
+                        if not isinstance(stream, dict):
+                            continue
 
                         # setup the stream URL
                         stream_url = f"{self.config.url}/movie/{self.config.username}/{self.config.password}/{stream.get('stream_id', '')}.mp4"
@@ -216,7 +234,6 @@ class XtreamSource(StreamSource):
         # return the streams
         return streams
 
-    
     """
     Fetch series from Xtream API
     
@@ -224,7 +241,7 @@ class XtreamSource(StreamSource):
     
     @return list: List of StreamInfo objects for series content
     """
-    async def _fetch_series(self) -> List[StreamInfo]:
+    async def _fetch_series_streams(self) -> List[StreamInfo]:
     
         # hold the streams
         streams = []
@@ -245,8 +262,17 @@ class XtreamSource(StreamSource):
                     # we do, so hold the data
                     data = await resp.json()
 
+                    # validate response is a list
+                    if not isinstance(data, list):
+                        logger.warning(f"Unexpected series response format from {self.config.name}: {type(data)}")
+                        return []
+
                     # loop the streams in the response
                     for series in data:
+
+                        # skip if not a dict
+                        if not isinstance(series, dict):
+                            continue
 
                         # setup the necessary data
                         series_id = series.get('series_id', '')
@@ -275,4 +301,3 @@ class XtreamSource(StreamSource):
         
         # return the streams
         return streams
-    
