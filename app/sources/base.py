@@ -83,17 +83,22 @@ class StreamSource:
                     logger.warning(f"Cannot refresh {self.config.name}: connection limit reached")
                     return False
             
-            # try to fetch the streams
+            # try to fetch the streams with timeout
             try:
 
-                # hold the streams
-                streams = await self._fetch_streams()
+                # hold the streams with a 60 second timeout
+                streams = await asyncio.wait_for(self._fetch_streams(), timeout=60)
                 self.streams = {s.name: s for s in streams}
                 self.last_refresh = datetime.now()
                 
                 # log it and return true
                 logger.info(f"Refreshed {len(self.streams)} streams from {self.config.name}")
                 return True
+            
+            # timeout fetching streams
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout fetching streams from {self.config.name}")
+                return False
             
             # whoops... there was an exception, and return false
             except Exception as e:
@@ -106,7 +111,7 @@ class StreamSource:
                 # Release connection after fetch
                 if self.connection_manager:
                     await self.connection_manager.release_connection(self.config.name)
-    
+
     """
     Fetch streams from source (implemented by subclasses)
     Abstract method to be implemented by concrete source types.
