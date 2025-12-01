@@ -40,11 +40,25 @@ class ConnectionManager:
     """
     Check if a connection can be acquired without actually acquiring it
     Verifies both source-specific and global connection limits.
+    Note: For atomic check-and-acquire, use try_acquire_connection() instead.
 
     @param source_id: str Source identifier to check
     @return bool: True if connection can be acquired, False otherwise
     """
-    def can_acquire_connection(self, source_id: str) -> bool:
+    async def can_acquire_connection(self, source_id: str) -> bool:
+        
+        # acquire the lock before checking
+        async with self._lock:
+            return self._can_acquire_unlocked(source_id)
+    
+    """
+    Internal unlocked version of can_acquire check
+    Must only be called while holding self._lock.
+
+    @param source_id: str Source identifier to check
+    @return bool: True if connection can be acquired, False otherwise
+    """
+    def _can_acquire_unlocked(self, source_id: str) -> bool:
         
         # setup the current source and limits
         current_source = self.source_connections.get(source_id, 0)
@@ -55,6 +69,31 @@ class ConnectionManager:
                 self.total_connections < self.max_total)
 
     """
+    Atomically check and acquire a connection if available
+    This is the preferred method to avoid race conditions between
+    checking availability and acquiring the connection.
+
+    @param source_id: str Source identifier requesting connection
+    @return bool: True if connection acquired, False if limits reached
+    """
+    async def try_acquire_connection(self, source_id: str) -> bool:
+        
+        # if we currently have a lock
+        async with self._lock:
+
+            # check if we can acquire before attempting
+            if not self._can_acquire_unlocked(source_id):
+                return False
+
+            # get the current source connection count
+            current_source = self.source_connections.get(source_id, 0)
+            
+            # increment the connection counts
+            self.source_connections[source_id] = current_source + 1
+            self.total_connections += 1
+            return True
+
+    """
     Get or create an API lock for a source
     
     @param source_id: str Source identifier to check
@@ -62,7 +101,7 @@ class ConnectionManager:
     """
     def get_api_lock(self, source_id: str) -> asyncio.Lock:
         
-        # if the source id is not already lovked
+        # if the source id is not already locked
         if source_id not in self.api_locks:
 
             # lock it!
@@ -74,28 +113,15 @@ class ConnectionManager:
     """
     Attempt to acquire a connection for a source
     Acquires a connection slot if limits allow, updating tracking counters.
+    Note: Prefer try_acquire_connection() for atomic check-and-acquire.
 
     @param source_id: str Source identifier requesting connection
     @return bool: True if connection acquired, False if limits reached
     """
     async def acquire_connection(self, source_id: str) -> bool:
         
-        # if we currently have a lock
-        async with self._lock:
-
-            # get the current source and limits
-            current_source = self.source_connections.get(source_id, 0)
-            source_limit = self.source_limits.get(source_id, 5)
-            
-            # if we can acquaire the connection return true
-            if (current_source < source_limit and 
-                self.total_connections < self.max_total):
-                self.source_connections[source_id] = current_source + 1
-                self.total_connections += 1
-                return True
-            
-            # default to false
-            return False
+        # delegate to try_acquire_connection for atomic operation
+        return await self.try_acquire_connection(source_id)
     
     """
     Release a connection for a source

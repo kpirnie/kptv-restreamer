@@ -21,7 +21,6 @@ from app.services import (
     ConnectionManager,
     StreamCache,
     StreamNameMapper,
-    StreamFilter,
     StreamAggregator
 )
 
@@ -218,7 +217,7 @@ class StreamService:
         for stream_idx, stream in enumerate(target_streams):
             source_id = stream.source_id
             
-            if not self.connection_manager.can_acquire_connection(source_id):
+            if not await self.connection_manager.can_acquire_connection(source_id):
                 logger.debug(f"Source {source_id} at connection limit, trying next")
                 continue
             
@@ -272,7 +271,7 @@ class StreamService:
                                         next_stream = target_streams[next_idx]
                                         next_source_id = next_stream.source_id
                                         
-                                        if not self.connection_manager.can_acquire_connection(next_source_id):
+                                        if not await self.connection_manager.can_acquire_connection(next_source_id):
                                             continue
                                         
                                         logger.info(
@@ -350,4 +349,4 @@ class StreamService:
             return "video/mp4"
         else:
             return "video/mp2t"
-        
+            
