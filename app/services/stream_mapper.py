@@ -42,14 +42,22 @@ class StreamNameMapper:
     """
     def _generate_safe_id(self, name: str) -> str:
         
-        # clean the name of all non alpha-numeric characters
-        clean_id = re.sub(r'[^a-zA-Z0-9]', '', name)
+        # Normalize unicode characters (ᴴᴰ becomes HD, etc.)
+        import unicodedata
+        normalized = unicodedata.normalize('NFKD', name)
         
-        # if we still dont have a cleaned id
+        # Replace spaces/pipes with underscores to preserve word boundaries
+        clean_id = re.sub(r'[\s|]+', '_', normalized)
+        
+        # Remove remaining non-alphanumeric (except underscores)
+        clean_id = re.sub(r'[^a-zA-Z0-9_]', '', clean_id)
+        
+        # Collapse multiple underscores
+        clean_id = re.sub(r'_+', '_', clean_id).strip('_')
+        
         if not clean_id:
             clean_id = "unknownstream"
         
-        # return it
         return clean_id
     
     """

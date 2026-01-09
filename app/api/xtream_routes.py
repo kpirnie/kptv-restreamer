@@ -123,7 +123,9 @@ async def get_live_streams(restreamer):
         display_name = primary_stream.display_name if primary_stream.display_name else name
 
         # Only include non-VOD, non-series streams
-        if "(Series)" not in name and not any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']):
+        is_series = "(Series)" in name
+        is_vod = any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'])        
+        if not is_series and not is_vod:
             streams.append({
                 "num": len(streams) + 1,
                 "name": display_name,
@@ -172,7 +174,8 @@ async def get_vod_streams(restreamer):
         display_name = primary_stream.display_name if primary_stream.display_name else name
         
         # Only include VOD streams (mp4, mkv, etc)
-        if any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']) and "(Series)" not in name:
+        is_vod = any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'])
+        if is_vod and "(Series)" not in name:
             streams.append({
                 "num": len(streams) + 1,
                 "name": display_name,
@@ -262,7 +265,9 @@ async def get_live_categories(restreamer):
         primary_stream = stream_list[0]
         
         # Only count live streams
-        if "(Series)" not in name and not any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']):
+        is_series = "(Series)" in name
+        is_vod = any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'])
+        if not is_series and not is_vod:
             category = primary_stream.group or "Uncategorized"
             if category not in categories:
                 categories[category] = {
@@ -290,7 +295,8 @@ async def get_vod_categories(restreamer):
         primary_stream = stream_list[0]
         
         # Only count VOD streams
-        if any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi']) and "(Series)" not in name:
+        is_vod = any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'])
+        if is_vod and "(Series)" not in name:
             category = primary_stream.group or "Uncategorized"
             if category not in categories:
                 categories[category] = {
