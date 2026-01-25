@@ -122,10 +122,12 @@ async def get_live_streams(restreamer):
         # Use the display_name from the stream (already has prefix/suffix applied)
         display_name = primary_stream.display_name if primary_stream.display_name else name
 
-        # Only include non-VOD, non-series streams
+        # Only include live streams - check the actual URL pattern from source
         is_series = "(Series)" in name
-        is_vod = any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'])        
-        if not is_series and not is_vod:
+        is_from_vod_endpoint = '/movie/' in primary_stream.url or any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'])
+        is_from_series_endpoint = '/series/' in primary_stream.url
+
+        if not is_series and not is_from_vod_endpoint and not is_from_series_endpoint:
             streams.append({
                 "num": len(streams) + 1,
                 "name": display_name,
@@ -173,9 +175,9 @@ async def get_vod_streams(restreamer):
         # Use the display_name from the stream (already has prefix/suffix applied)
         display_name = primary_stream.display_name if primary_stream.display_name else name
         
-        # Only include VOD streams (mp4, mkv, etc)
-        is_vod = any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'])
-        if is_vod and "(Series)" not in name:
+        # Only include VOD streams - check if from movie endpoint
+        is_from_vod_endpoint = '/movie/' in primary_stream.url or any(ext in primary_stream.url.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'])
+        if is_from_vod_endpoint and "(Series)" not in name:
             streams.append({
                 "num": len(streams) + 1,
                 "name": display_name,
@@ -211,8 +213,9 @@ async def get_series(restreamer):
     for name, stream_list in grouped_streams.items():
         primary_stream = stream_list[0]
         
-        # Only include series
-        if "(Series)" in name:
+        # Only include series - check both the name marker and the URL pattern
+        is_from_series_endpoint = '/series/' in primary_stream.url
+        if "(Series)" in name or is_from_series_endpoint:
             # Use the original Xtream stream_id if available
             if primary_stream.stream_id:
                 xtream_stream_id = primary_stream.stream_id
