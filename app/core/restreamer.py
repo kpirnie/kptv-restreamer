@@ -19,7 +19,8 @@ from app.services import (
     StreamNameMapper,
     StreamFilter,
     StreamAggregator,
-    StreamService
+    StreamService,
+    EPGCache
 )
 from app.sources import XtreamSource, M3USource
 
@@ -53,6 +54,7 @@ class StreamRestreamer:
         self.refresh_task = None
         self.stream_cache = None
         self.stream_service = None
+        self.epg_cache = None
     
     """
     Initialize the application
@@ -84,6 +86,9 @@ class StreamRestreamer:
         # setup the stream cache and start it up
         self.stream_cache = StreamCache(self.session, self.connection_manager)
         self.stream_cache.start()
+
+        # setup the EPG cache
+        self.epg_cache = EPGCache(self.session)
         
         # setup the stream service
         self.stream_service = StreamService(
@@ -121,6 +126,10 @@ class StreamRestreamer:
         # create the async task refresher loop
         self.refresh_task = asyncio.create_task(self._refresh_loop())
         await self.aggregator.refresh_all_sources()
+
+        # collect EPG sources and warm the cache
+        self._update_epg_sources()
+        await self.epg_cache.warm()
  
     """
     Cleanup resources
@@ -166,6 +175,9 @@ class StreamRestreamer:
                 await asyncio.sleep(60)
                 await self.aggregator.refresh_all_sources()
 
+                # update EPG sources in case they changed after refresh
+                self._update_epg_sources()
+
             # whoops, we are in a cancelation...
             except asyncio.CancelledError:
                 break
@@ -173,6 +185,20 @@ class StreamRestreamer:
             # whoopsie... there's an error in the loop
             except Exception as e:
                 logger.error(f"Error in refresh loop: {e}")
+
+    """
+    Collect EPG source URLs from all enabled sources and update the EPG cache
+
+    @return None
+    """
+    def _update_epg_sources(self):
+
+        epg_sources = []
+        for source in self.aggregator.sources.values():
+            if source.config.enabled and getattr(source.config, 'epg_url', None):
+                epg_sources.append(source.config.epg_url)
+
+        self.epg_cache.set_sources(epg_sources)
     
     """
     Generate M3U8 playlist
@@ -199,26 +225,10 @@ class StreamRestreamer:
     
     """
     EPG Data
-    Get aggregated EPG data from all Xtream sources
+    Get cached EPG data
 
     @return str: The xmltv formatted epg
     """
     async def get_epg_data(self) -> str:
         
-        epg_sources = []
-        for source in self.aggregator.sources.values():
-            if source.config.epg_url and source.config.enabled:
-                epg_sources.append(source.config.epg_url)
-        
-        if not epg_sources:
-            return '<?xml version="1.0" encoding="UTF-8"?><tv></tv>'
-        
-        # Fetch from first available source
-        try:
-            async with self.session.get(epg_sources[0]) as resp:
-                if resp.status == 200:
-                    return await resp.text()
-        except Exception as e:
-            logger.error(f"Failed to fetch EPG: {e}")
-        
-        return '<?xml version="1.0" encoding="UTF-8"?><tv></tv>'
+        return await self.epg_cache.get_epg_data()

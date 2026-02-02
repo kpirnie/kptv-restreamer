@@ -15,6 +15,7 @@ from .stream_mapper import StreamNameMapper
 from .stream_filter import StreamFilter
 from .stream_aggregator import StreamAggregator
 from .stream_service import StreamService
+from .epg_cache import EPGCache
 
 # hold the necessary modules
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "StreamFilter",
     "StreamAggregator",
     "StreamService",
+    "EPGCache",
 ]
