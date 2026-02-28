@@ -339,6 +339,7 @@ async def debug_grouped_streams(request: Request):
     return result
 
 @router.get("/epg.xml")
+@router.get("/xmltv.php")
 async def get_epg(request: Request):
     """Get aggregated EPG data"""
     restreamer = get_restreamer(request)
