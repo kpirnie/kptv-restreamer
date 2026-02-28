@@ -347,4 +347,4 @@ async def get_epg(request: Request):
         raise HTTPException(status_code=503, detail="Service not initialized")
     
     epg_data = await restreamer.get_epg_data()
-    return Response(content=epg_data, media_type="application/xml")
+    return Response(content=epg_data, media_type="application/xml") 
